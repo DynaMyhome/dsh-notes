@@ -1,0 +1,241 @@
+/**
+ * 笔记编辑区(CodeMirror 6,所见即所得)。
+ *
+ * 行为:
+ *   - 打开即读正文 + **版本号**(与 save 同源);改字后 800ms 自动保存;
+ *   - `Ctrl/Cmd+S` 立即保存(在 CM6 的 keymap 里);
+ *   - 守卫式保存:版本不符 → **冲突条**(重新载入 / 覆盖),绝不静默覆盖;
+ *   - 工具栏:粗体/斜体/高亮/H1-3/列表/引用/行内码/图片。
+ *
+ * 文件始终是纯 md:编辑器只改源码,渲染由 CM6 装饰层完成(见 editor/setup.ts)。
+ */
+
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+
+import { RouteError, readNote, saveNote, type TreeNote } from './api'
+import { createEditor, toggleLinePrefix, wrapSelection, type EditorHandle } from './editor/setup'
+import {
+  IconBold,
+  IconCheck,
+  IconCode,
+  IconHeading,
+  IconHighlight,
+  IconImage,
+  IconItalic,
+  IconList,
+  IconQuote,
+  IconWarn,
+} from './icons'
+
+/** 自动保存的静默时长(ms)。 */
+const AUTOSAVE_MS = 800
+
+/** props。 */
+export interface EditorPaneProps {
+  t: (key: string) => string
+  sessionId: string
+  note: TreeNote
+}
+
+/** 保存状态。 */
+type SaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
+
+/**
+ * 编辑区。
+ * @param props - 见 {@link EditorPaneProps}。
+ */
+export function EditorPane(props: EditorPaneProps): React.ReactElement {
+  const { t, sessionId, note } = props
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const editorRef = useRef<EditorHandle | null>(null)
+  const versionRef = useRef<string>('')
+  const timerRef = useRef<number | null>(null)
+  const dirtyRef = useRef(false)
+  const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading')
+  const [error, setError] = useState<string | null>(null)
+  const [saveState, setSaveState] = useState<SaveState>('idle')
+  const [conflict, setConflict] = useState<{ version: string; text: string | null } | null>(null)
+  const [docPath, setDocPath] = useState<string | null>(null)
+  const [length, setLength] = useState(0)
+
+  /** 保存(守卫式)。 */
+  const save = useCallback(async (): Promise<void> => {
+    const editor = editorRef.current
+    if (editor === null || !dirtyRef.current) return
+    const text = editor.getDoc()
+    setSaveState('saving')
+    try {
+      const result = await saveNote(sessionId, note.path, text, versionRef.current)
+      versionRef.current = String(result.version)
+      dirtyRef.current = false
+      setSaveState('saved')
+      setConflict(null)
+    } catch (caught) {
+      if (caught instanceof RouteError && caught.code === 'FS_STALE_VERSION') {
+        setConflict({ version: caught.currentVersion ?? '', text: caught.currentText ?? null })
+        setSaveState('error')
+        return
+      }
+      setError(caught instanceof Error ? caught.message : String(caught))
+      setSaveState('error')
+    }
+  }, [note.path, sessionId])
+
+  /** 载入笔记并挂上编辑器。 */
+  useEffect(() => {
+    let cancelled = false
+    setStatus('loading')
+    setError(null)
+    setConflict(null)
+    dirtyRef.current = false
+    setSaveState('idle')
+
+    void (async () => {
+      try {
+        const loaded = await readNote(sessionId, note.path)
+        if (cancelled) return
+        versionRef.current = String(loaded.version)
+        setDocPath(loaded.absolutePath)
+        setLength(loaded.text.length)
+        const host = hostRef.current
+        if (host === null) return
+        editorRef.current?.destroy()
+        editorRef.current = createEditor({
+          parent: host,
+          doc: loaded.text,
+          documentPath: loaded.absolutePath,
+          onChange: () => {
+            dirtyRef.current = true
+            setSaveState('dirty')
+            setLength(editorRef.current?.getDoc().length ?? 0)
+            if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+            timerRef.current = window.setTimeout(() => {
+              void save()
+            }, AUTOSAVE_MS)
+          },
+          onSave: () => {
+            if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+            void save()
+          },
+        })
+        setStatus('ready')
+      } catch (caught) {
+        if (cancelled) return
+        setError(caught instanceof Error ? caught.message : String(caught))
+        setStatus('failed')
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+      timerRef.current = null
+      editorRef.current?.destroy()
+      editorRef.current = null
+    }
+  }, [note.path, save, sessionId])
+
+  /** 冲突:用磁盘上的内容重新载入。 */
+  const reload = useCallback(() => {
+    const editor = editorRef.current
+    if (editor === null || conflict === null) return
+    if (conflict.text !== null) editor.setDoc(conflict.text)
+    versionRef.current = conflict.version
+    dirtyRef.current = false
+    setConflict(null)
+    setSaveState('saved')
+    setLength(conflict.text?.length ?? 0)
+  }, [conflict])
+
+  /** 冲突:以本地内容覆盖(用磁盘版本作为前提)。 */
+  const overwrite = useCallback(async () => {
+    if (conflict === null) return
+    versionRef.current = conflict.version
+    dirtyRef.current = true
+    setConflict(null)
+    await save()
+  }, [conflict, save])
+
+  const apply = useCallback((action: (handle: EditorHandle) => void) => {
+    const editor = editorRef.current
+    if (editor === null) return
+    action(editor)
+  }, [])
+
+  const stateText =
+    status === 'loading'
+      ? t('editor.loading')
+      : saveState === 'saving'
+        ? t('editor.saving')
+        : saveState === 'dirty'
+          ? t('editor.dirty')
+          : saveState === 'error'
+            ? t('editor.saveFailed')
+            : t('editor.saved')
+
+  return (
+    <div className="dsh-notes-editor-pane">
+      <div className="dsh-notes-editor-bar">
+        <span className="dsh-notes-editor-name" title={docPath ?? note.path}>
+          {note.title}
+        </span>
+        <span className="dsh-notes-spacer" />
+        <span className="dsh-notes-toolbar dsh-notes-editor-tools">
+          <button type="button" className="dsh-notes-btn" title={t('editor.bold')} aria-label={t('editor.bold')} onClick={() => apply((e) => wrapSelection(e.view, '**'))}>
+            <IconBold />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.italic')} aria-label={t('editor.italic')} onClick={() => apply((e) => wrapSelection(e.view, '*'))}>
+            <IconItalic />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.highlight')} aria-label={t('editor.highlight')} onClick={() => apply((e) => wrapSelection(e.view, '=='))}>
+            <IconHighlight />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.heading')} aria-label={t('editor.heading')} onClick={() => apply((e) => toggleLinePrefix(e.view, '## '))}>
+            <IconHeading />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.list')} aria-label={t('editor.list')} onClick={() => apply((e) => toggleLinePrefix(e.view, '- '))}>
+            <IconList />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.quote')} aria-label={t('editor.quote')} onClick={() => apply((e) => toggleLinePrefix(e.view, '> '))}>
+            <IconQuote />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.code')} aria-label={t('editor.code')} onClick={() => apply((e) => wrapSelection(e.view, '`'))}>
+            <IconCode />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.image')} aria-label={t('editor.image')} onClick={() => apply((e) => wrapSelection(e.view, '![', '](path/to/image.png)'))}>
+            <IconImage />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.saveNow')} aria-label={t('editor.saveNow')} onClick={() => void save()}>
+            <IconCheck />
+          </button>
+        </span>
+      </div>
+
+      {conflict !== null ? (
+        <div className="dsh-notes-conflict">
+          <IconWarn size={14} />
+          <span className="dsh-notes-conflict-text">{t('editor.conflict')}</span>
+          <button type="button" className="dsh-notes-btn" onClick={reload}>
+            {t('editor.reload')}
+          </button>
+          <button type="button" className="dsh-notes-btn" onClick={() => void overwrite()}>
+            {t('editor.overwrite')}
+          </button>
+        </div>
+      ) : null}
+
+      {status === 'failed' ? (
+        <div className="dsh-notes-error">{error ?? t('editor.loadFailed')}</div>
+      ) : (
+        <div className="dsh-notes-editor-host" ref={hostRef} />
+      )}
+
+      <div className="dsh-notes-editor-status">
+        <span>{stateText}</span>
+        <span className="dsh-notes-spacer" />
+        <span className="dsh-notes-dim">{t('editor.chars').replace('{n}', String(length))}</span>
+        <span className="dsh-notes-dim dsh-notes-mono">{note.relPath}</span>
+      </div>
+    </div>
+  )
+}

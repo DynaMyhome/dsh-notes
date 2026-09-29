@@ -34,10 +34,16 @@ const result = await build({
   target: ['es2022'],
   jsx: 'automatic',
   external: ['react', 'react/jsx-runtime'],
+  // 编辑器依赖装在 scripts/(工具链自留地),所以要显式告诉 esbuild 去哪找;
+  // 往 dsh-notes/node_modules 里装会破坏它指向 profile 的软链(见 AGENTS.md)。
+  nodePaths: ['scripts/node_modules'],
   write: false,
   logLevel: 'warning',
   legalComments: 'none',
   sourcemap: false,
+  // 编辑器(CodeMirror 6)内联进同一个 bundle:先把体验做通,
+  // 之后若要拆 `require.async` 惰性分片(参考官方 documentpreview 的 client.pdf.js)再说。
+  minify: true,
 })
 
 const body = result.outputFiles[0].text
