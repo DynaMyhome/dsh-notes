@@ -82,6 +82,9 @@ const lineDecorations: Record<string, Decoration> = {
   codeLang: Decoration.line({ class: 'dsh-cm-code-lang' }),
   /** markdown 表格的分隔行 `|---|`。 */
   tableDelim: Decoration.line({ class: 'dsh-cm-table-delim' }),
+  /** 表格表头行 / 数据行(块级 widget 需要 StateField,先做行级渲染)。 */
+  tableHead: Decoration.line({ class: 'dsh-cm-table-head' }),
+  tableRow: Decoration.line({ class: 'dsh-cm-table-row' }),
   frontmatter: Decoration.line({ class: 'dsh-cm-frontmatter' }),
 }
 
@@ -180,7 +183,13 @@ class BulletWidget extends WidgetType {
   }
 }
 
-/** markdown 表格 → 真 `<table>`(非活动态);点一下把光标送进源码。 */
+/**
+ * markdown 表格 → 真 `<table>`(保留给下一步:块级装饰必须走 StateField)。
+ *
+ * ⚠️ **暂时不要用 ViewPlugin 把它接上** —— 跨行替换会被 CM6 拒绝:
+ * "Decorations that replace line breaks may not be specified via plugins"。
+ * 搬进 StateField 后再启用(见 buildDecorations 里 Table 分支的说明)。
+ */
 class TableWidget extends WidgetType {
   constructor(
     readonly source: string,
@@ -428,24 +437,20 @@ function buildDecorations(
           return
         }
 
-        // 表格:整段渲染成**真表格**(只要没有任何一行是活动行,便于点进去改源码)。
-        // lezer 的 GFM 会给出 Table 节点;活动行仍然显示源码,和标题/图片一个规则。
+        // 表格:**只做行级渲染**。
+        //
+        // 这里踩过一个 CM6 硬约束:"Decorations that replace line breaks may not be
+        // specified via plugins" —— 用 ViewPlugin 提供**跨行替换**(整块换成 <table>)
+        // 会直接报错。跨行/块级替换必须来自 StateField,所以表格的 widget 化要和
+        // 装饰层一起搬进 StateField(见本文件顶部说明),在那之前先给每行上样式:
+        // 表头加粗、分隔行弱化,读起来仍是表格。
         if (name === 'Table') {
-          const raw = state.doc.sliceString(node.from, node.to)
           const startLine = state.doc.lineAt(node.from).number
           const endLine = state.doc.lineAt(node.to).number
-          let anyActive = false
           for (let number = startLine; number <= endLine; number += 1) {
-            if (keepSource.has(number)) anyActive = true
-          }
-          if (!anyActive) {
-            add(node.from, node.to, Decoration.replace({ widget: new TableWidget(raw, node.from) }))
-          } else {
-            // 源码态:把 `|---|:--|` 这种分隔行弱化,读起来不那么吵
-            for (let number = startLine; number <= endLine; number += 1) {
-              const line = state.doc.line(number)
-              if (/^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line.text)) add(line.from, line.from, lineDecorations.tableDelim)
-            }
+            const item = state.doc.line(number)
+            if (/^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(item.text)) add(item.from, item.from, lineDecorations.tableDelim)
+            else add(item.from, item.from, number === startLine ? lineDecorations.tableHead : lineDecorations.tableRow)
           }
           return
         }
@@ -659,7 +664,13 @@ const theme = EditorView.theme({
     borderTopLeftRadius: '6px',
     borderTopRightRadius: '6px',
   },
-  '.dsh-cm-table-delim': { color: 'var(--dsw-alias-label-secondary)', opacity: '.55' },
+  '.dsh-cm-table-delim': { color: 'var(--dsw-alias-label-secondary)', opacity: '.45' },
+  '.dsh-cm-table-head': {
+    fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)',
+    fontWeight: '600',
+    background: 'var(--dsw-alias-bg-layer-2)',
+  },
+  '.dsh-cm-table-row': { fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)' },
   '.dsh-cm-bullet': { color: 'var(--dsw-alias-label-secondary)', paddingRight: '2px' },
   '.dsh-cm-table-wrap': { padding: '4px 0' },
   '.dsh-cm-table': {
