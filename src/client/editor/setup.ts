@@ -54,6 +54,7 @@ import { tags as tag } from '@lezer/highlight'
 
 import { moveSection as moveSectionText } from '../../../lib/section.js'
 import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
+import { decorateFromTree } from './decorate'
 
 /** 行内隐藏/标记装饰。 */
 const markStrong = Decoration.mark({ class: 'dsh-cm-strong' })
@@ -525,11 +526,19 @@ function safeBuild(
   getKnownTitles?: () => Set<string>,
 ): DecorationSet {
   try {
-    return buildDecorations(view, documentPath, getKnownTitles)
+    // 装饰决策已全部交给纯决策层(lib/markdown-render.js + editor/decorate.ts):
+    // 保证"测试里验证过的行为"就是"编辑器里的行为",这里不再有自己的规则。
+    return decorateFromTree(view, documentPath, getKnownTitles)
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error('[dsh-notes] 装饰层构建失败(退化为纯源码视图):', error)
-    return Decoration.none
+    console.error('[dsh-notes] 新装饰层失败,回退旧构建器:', error)
+    try {
+      return buildDecorations(view, documentPath, getKnownTitles)
+    } catch (inner) {
+      // eslint-disable-next-line no-console
+      console.error('[dsh-notes] 旧装饰层也失败,退化为纯源码视图:', inner)
+      return Decoration.none
+    }
   }
 }
 
