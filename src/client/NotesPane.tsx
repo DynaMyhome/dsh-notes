@@ -257,18 +257,6 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         <button type="button" className="dsh-notes-btn" onClick={() => void submitCompose()}>
           {t('compose.ok')}
         </button>
-        <button
-          type="button"
-          className="dsh-notes-btn"
-          title={t('compose.cancel')}
-          aria-label={t('compose.cancel')}
-          onClick={() => {
-            setCompose(null)
-            setDraft('')
-          }}
-        >
-          ×
-        </button>
       </div>
     )
 
