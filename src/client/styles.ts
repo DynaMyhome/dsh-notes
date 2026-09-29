@@ -6,7 +6,7 @@
  */
 export const CSS = [
   /* 外壳 */
-  '.dsh-notes-root{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit}',
+  '.dsh-notes-root{position:relative;display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit}',
   '.dsh-notes-header{display:flex;align-items:center;gap:4px;flex:0 0 auto;height:30px;padding:0 8px;border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-sidebar-fill)}',
   '.dsh-notes-title{font-size:12px;font-weight:600;white-space:nowrap}',
   '.dsh-notes-sub{font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
@@ -53,7 +53,8 @@ export const CSS = [
   '.dsh-notes-compose{display:flex;align-items:center;gap:4px;padding:4px 6px;border-bottom:1px solid var(--dsw-alias-border-l1)}',
   '.dsh-notes-input{flex:1 1 auto;min-width:0;box-sizing:border-box;padding:3px 7px;border-radius:5px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px}',
   '.dsh-notes-input:focus{outline:none;border-color:var(--dsw-alias-brand-primary)}',
-  '.dsh-notes-status{padding:3px 10px;font-size:11px;color:var(--dsw-alias-state-success-primary);border-bottom:1px solid var(--dsw-alias-border-l1);animation:dsh-notes-status-fade 2.4s forwards}',
+  /* 状态提示:浮层 toast —— 之前它插在正常流里,出现/消失会把下面的内容整体顶一下(用户看到"一闪一闪") */
+  '.dsh-notes-status{position:absolute;top:34px;left:50%;transform:translateX(-50%);z-index:50;pointer-events:none;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 10px;border-radius:999px;font-size:11px;color:var(--dsw-alias-state-success-primary);background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l2);box-shadow:0 6px 18px rgba(0,0,0,.18);animation:dsh-notes-status-fade 2.4s forwards}',
   '@keyframes dsh-notes-status-fade{0%,70%{opacity:1}100%{opacity:0}}',
   '.dsh-notes-error{display:flex;align-items:flex-start;gap:6px;padding:4px 6px 4px 10px;font-size:11px;line-height:1.6;color:var(--dsw-alias-state-error-primary);white-space:pre-wrap}',
   '.dsh-notes-error-text{flex:1 1 auto;min-width:0}',

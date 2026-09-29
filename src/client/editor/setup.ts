@@ -32,7 +32,14 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from '@codemirror/view'
-import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
+import {
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+  completionKeymap,
+  type CompletionContext,
+  type CompletionResult,
+} from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentLess, indentMore, indentWithTab } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import {
@@ -44,6 +51,8 @@ import {
 } from '@codemirror/lang-markdown'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { tags as tag } from '@lezer/highlight'
+
+import { moveSection as moveSectionText } from '../../../lib/section.js'
 
 /** 行内隐藏/标记装饰。 */
 const markStrong = Decoration.mark({ class: 'dsh-cm-strong' })
@@ -69,6 +78,10 @@ const lineDecorations: Record<string, Decoration> = {
   quote: Decoration.line({ class: 'dsh-cm-quote' }),
   rule: Decoration.line({ class: 'dsh-cm-rule' }),
   code: Decoration.line({ class: 'dsh-cm-code-line' }),
+  /** 代码围栏的开头行:隐藏 ``` 之后只剩语言名,给它一个 chip 样式。 */
+  codeLang: Decoration.line({ class: 'dsh-cm-code-lang' }),
+  /** markdown 表格的分隔行 `|---|`。 */
+  tableDelim: Decoration.line({ class: 'dsh-cm-table-delim' }),
   frontmatter: Decoration.line({ class: 'dsh-cm-frontmatter' }),
 }
 
@@ -151,6 +164,86 @@ export function resolveImageUrl(documentPath: string | null, destination: string
   }
   const query = absolute.replace(/^<|>$/g, '')
   return `api/file?path=${encodeURIComponent(query)}`
+}
+
+/** 无序列表的项目符号(`-`/`*`/`+` → `•`,和 Typora 一致)。 */
+class BulletWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    const dot = document.createElement('span')
+    dot.className = 'dsh-cm-bullet'
+    dot.textContent = '•'
+    return dot
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+
+/** markdown 表格 → 真 `<table>`(非活动态);点一下把光标送进源码。 */
+class TableWidget extends WidgetType {
+  constructor(
+    readonly source: string,
+    readonly from: number,
+  ) {
+    super()
+  }
+
+  eq(other: TableWidget): boolean {
+    return other.source === this.source
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'dsh-cm-table-wrap'
+    const rows = this.source
+      .split(/\r?\n/)
+      .filter((line) => line.trim() !== '')
+      .filter((line) => !/^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line))
+      .map((line) =>
+        line
+          .trim()
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
+          .split('|')
+          .map((cell) => cell.trim()),
+      )
+    if (rows.length === 0) return wrap
+    const table = document.createElement('table')
+    table.className = 'dsh-cm-table'
+    const head = document.createElement('thead')
+    const headRow = document.createElement('tr')
+    for (const cell of rows[0]) {
+      const th = document.createElement('th')
+      th.textContent = cell
+      headRow.appendChild(th)
+    }
+    head.appendChild(headRow)
+    table.appendChild(head)
+    const body = document.createElement('tbody')
+    for (const row of rows.slice(1)) {
+      const tr = document.createElement('tr')
+      for (const cell of row) {
+        const td = document.createElement('td')
+        td.textContent = cell
+        tr.appendChild(td)
+      }
+      body.appendChild(tr)
+    }
+    table.appendChild(body)
+    wrap.appendChild(table)
+    // 点表格 = 把光标送到表格源码开头(那一行进入活动态 → 自动显示源码)
+    wrap.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      view.dispatch({ selection: { anchor: Math.min(this.from, view.state.doc.length) } })
+      view.focus()
+    })
+    return wrap
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
 }
 
 /** 行内图片 widget。 */
@@ -265,6 +358,18 @@ function buildDecorations(
         const line = state.doc.lineAt(node.from)
         const onActiveLine = keepSource.has(line.number)
 
+        // 列表符号:非活动行把 `-`/`*`/`+` 渲染成项目符号 `•`;
+        // 任务项(`- [ ] x`)连符号一起换成复选框,不留 `-`;有序列表保留数字。
+        if (!onActiveLine && name === 'ListMark') {
+          const mark = state.doc.sliceString(node.from, node.to).trim()
+          const lineText = state.doc.lineAt(node.from).text
+          if (/^[-*+]$/.test(mark)) {
+            if (/^\s*[-*+]\s+\[[ xX]\]/.test(lineText)) add(node.from, node.to, hide)
+            else add(node.from, node.to, Decoration.replace({ widget: new BulletWidget() }))
+          }
+          return
+        }
+
         // 标记符号:非活动行隐藏(Typora 的核心手感)。
         //
         // 关键事实:本环境里 **`SyntaxNode.children` 恒为 null**(实测:Document 也是 null);
@@ -287,7 +392,14 @@ function buildDecorations(
           add(line.from, line.from, lineDecorations.rule)
           return
         } else if (name === 'FencedCode' || name === 'CodeBlock') {
-          add(line.from, line.from, lineDecorations.code)
+          // 整个代码块**每一行**都要代码样式 —— 之前只给 node.from 那一行加,
+          // 结果是围栏首行有底色、正文没有(用户截图里那个"js 一条灰底")。
+          const first = state.doc.lineAt(node.from).number
+          const last = state.doc.lineAt(Math.max(node.from, node.to - 1)).number
+          for (let number = first; number <= last; number += 1) {
+            const item = state.doc.line(number)
+            add(item.from, item.from, number === first ? lineDecorations.codeLang : lineDecorations.code)
+          }
           codeRanges.push({ from: node.from, to: node.to })
           return
         }
@@ -313,6 +425,28 @@ function buildDecorations(
           }
           // 裸 URL 仍显示,只弱化
           add(node.from, node.to, markUrl)
+          return
+        }
+
+        // 表格:整段渲染成**真表格**(只要没有任何一行是活动行,便于点进去改源码)。
+        // lezer 的 GFM 会给出 Table 节点;活动行仍然显示源码,和标题/图片一个规则。
+        if (name === 'Table') {
+          const raw = state.doc.sliceString(node.from, node.to)
+          const startLine = state.doc.lineAt(node.from).number
+          const endLine = state.doc.lineAt(node.to).number
+          let anyActive = false
+          for (let number = startLine; number <= endLine; number += 1) {
+            if (keepSource.has(number)) anyActive = true
+          }
+          if (!anyActive) {
+            add(node.from, node.to, Decoration.replace({ widget: new TableWidget(raw, node.from) }))
+          } else {
+            // 源码态:把 `|---|:--|` 这种分隔行弱化,读起来不那么吵
+            for (let number = startLine; number <= endLine; number += 1) {
+              const line = state.doc.line(number)
+              if (/^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line.text)) add(line.from, line.from, lineDecorations.tableDelim)
+            }
+          }
           return
         }
 
@@ -515,6 +649,35 @@ const theme = EditorView.theme({
     fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)',
     background: 'var(--dsw-alias-bg-layer-1)',
   },
+  '.dsh-cm-code-lang': {
+    fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)',
+    fontSize: '0.78em',
+    letterSpacing: '.04em',
+    textTransform: 'uppercase',
+    color: 'var(--dsw-alias-label-secondary)',
+    background: 'var(--dsw-alias-bg-layer-1)',
+    borderTopLeftRadius: '6px',
+    borderTopRightRadius: '6px',
+  },
+  '.dsh-cm-table-delim': { color: 'var(--dsw-alias-label-secondary)', opacity: '.55' },
+  '.dsh-cm-bullet': { color: 'var(--dsw-alias-label-secondary)', paddingRight: '2px' },
+  '.dsh-cm-table-wrap': { padding: '4px 0' },
+  '.dsh-cm-table': {
+    borderCollapse: 'collapse',
+    fontSize: '0.95em',
+    width: 'fit-content',
+    maxWidth: '100%',
+  },
+  '.dsh-cm-table th, .dsh-cm-table td': {
+    border: '1px solid var(--dsw-alias-border-l1)',
+    padding: '3px 10px',
+    textAlign: 'left',
+    verticalAlign: 'top',
+  },
+  '.dsh-cm-table th': {
+    fontWeight: '600',
+    background: 'var(--dsw-alias-bg-layer-2)',
+  },
   '.dsh-cm-task': { verticalAlign: 'middle', marginRight: '6px', accentColor: 'var(--dsw-alias-brand-primary)' },
   '.dsh-cm-image': { display: 'inline-flex', flexDirection: 'column', gap: '2px', verticalAlign: 'middle' },
   '.dsh-cm-image img': { maxWidth: '100%', maxHeight: '320px', borderRadius: '6px', display: 'block' },
@@ -543,6 +706,8 @@ export interface EditorHandle {
   getDoc: () => string
   /** 把光标放到某一行并滚到可视区顶部(大纲跳转用)。 */
   scrollToLine: (line: number) => void
+  /** 按大纲把某个章节搬到另一个标题前/后(纯文本级搬移,见 lib/section.js)。 */
+  moveSection: (fromLine: number, toLine: number, mode: 'before' | 'after') => boolean
 }
 
 /** 创建编辑器。 */
@@ -572,6 +737,23 @@ export function createEditor(options: {
       EditorView.lineWrapping,
       // 自动配对 `*`/`_`/`[`/`(` 等;配合 markdown 的续写命令
       closeBrackets(),
+      // `[[` 补全笔记名:光标前是 `[[xxx` 时就列出现有标题,选中补 `标题]]`
+      autocompletion({
+        override: [
+          (context: CompletionContext): CompletionResult | null => {
+            const before = context.matchBefore(/\[\[[^\]\n]{0,200}$/)
+            if (before === null) return null
+            const titles = Array.from(options.getKnownTitles?.() ?? [])
+            if (titles.length === 0) return null
+            return {
+              from: before.from + 2,
+              options: titles.map((title) => ({ label: title, apply: `${title}]]` })),
+              validFor: /^[^\]\n]*$/,
+            }
+          },
+        ],
+        activateOnTyping: true,
+      }),
       markdown({ base: markdownLanguage, addKeymap: false }),
       syntaxHighlighting(highlight),
       search({ top: true }),
@@ -634,6 +816,7 @@ export function createEditor(options: {
         { key: 'Tab', preventDefault: true, run: indentMore },
         { key: 'Shift-Tab', preventDefault: true, run: indentLess },
         ...closeBracketsKeymap,
+        ...completionKeymap,
         ...searchKeymap,
         ...markdownKeymap,
         indentWithTab,
@@ -657,6 +840,20 @@ export function createEditor(options: {
     focus: () => view.focus(),
     destroy: () => view.destroy(),
     getDoc: () => view.state.doc.toString(),
+    moveSection: (fromLine: number, toLine: number, mode: 'before' | 'after') => {
+      const result = moveSectionText(view.state.doc.toString(), fromLine, toLine, mode)
+      if (result === null) return false
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: result.text } })
+      view.dispatch({
+        selection: { anchor: view.state.doc.line(Math.max(1, Math.min(view.state.doc.lines, result.line))).from },
+        effects: EditorView.scrollIntoView(view.state.doc.line(Math.max(1, Math.min(view.state.doc.lines, result.line))).from, {
+          y: 'start',
+          yMargin: 56,
+        }),
+      })
+      view.focus()
+      return true
+    },
     scrollToLine: (line: number) => {
       const total = view.state.doc.lines
       const target = Math.max(1, Math.min(total, line))
