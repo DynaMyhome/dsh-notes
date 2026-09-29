@@ -119,6 +119,16 @@ test('applyScan: 改名/移动按 id 重绑,漏扫的条目直接丢弃(不留 t
   assert.equal(withUnknown.noteByPath('/ws_a/notes/x.md') === undefined, true)
 })
 
+test('applyScan: id 读不出来的扫描条目不会让已登记笔记被误删(回归)', () => {
+  const registry = seeded()
+  const note = noteRecord({ path: '/ws_a/notes/big.md', workspaceKey: 'ws_a', title: 'big' })
+  registry.addNote(note)
+  // 超大文件 / 读失败 → id 为 null,但它确实还躺在盘上
+  const result = registry.applyScan('ws_a', [{ id: null, path: '/ws_a/notes/big.md', title: 'big' }])
+  assert.deepEqual(result, { rebound: 0, registered: 0, dropped: 0 })
+  assert.equal(registry.noteById(note.id) !== undefined, true)
+})
+
 test('applyScan: 同一工作区里 repeat 扫描不误删仍在盘上的条目', () => {
   const registry = seeded()
   const a = noteRecord({ path: '/ws_a/notes/a.md', workspaceKey: 'ws_a', title: 'a' })

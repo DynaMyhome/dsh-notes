@@ -93,6 +93,12 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const run = useCallback(
     async (action: string, payload: Record<string, unknown>, done?: (value: any) => void) => {
       if (busy) return
+      // 没有会话 = 没有工作区;宁可什么都不做,也不能把写请求发成空 payload
+      // (Host 侧现在也会拒绝,这里是第一道闸)。
+      if (sessionId === '') {
+        setError(t('status.noSession'))
+        return
+      }
       setBusy(true)
       try {
         const value = await call(action, { sessionId, ...payload })
@@ -104,7 +110,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         setBusy(false)
       }
     },
-    [busy, refresh, sessionId],
+    [busy, refresh, sessionId, t],
   )
 
   /** 提交新建输入条。 */
@@ -162,7 +168,11 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       <div className="dsh-notes-header">
         <span className="dsh-notes-title">{t('tab.title')}</span>
         <span className="dsh-notes-sub">
-          {tree === null ? t('tree.loading') : t('tree.summary').replace('{n}', String(tree.stats.notes))}
+          {sessionId === ''
+            ? t('status.noSession')
+            : tree === null
+              ? t('tree.loading')
+              : t('tree.summary').replace('{n}', String(tree.stats.notes))}
         </span>
         <span className="dsh-notes-spacer" />
         <button
