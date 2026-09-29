@@ -14,6 +14,8 @@ import { ensureSyntaxTree } from '@codemirror/language'
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 
 import { HIDE, LINE, MARK, WIDGET, decideDecorations } from '../../../lib/markdown-render.js'
+import temml from 'temml'
+
 import { isSourceMode } from './mode'
 import { resolveImageUrl } from './setup'
 
@@ -176,6 +178,8 @@ export function decorateFromTree(
       } else if (description.widget === 'task') {
         const checked = description.data?.checked === true
         ranges.push(Decoration.replace({ widget: new TaskWidget(checked, from, to) }).range(from, to))
+      } else if (description.widget === 'math') {
+        ranges.push(Decoration.replace({ widget: new MathWidget(String(description.data?.tex ?? '')) }).range(from, to))
       } else if (description.widget === 'image') {
         const destination = String(description.data?.destination ?? '')
         const url = resolveImageUrl(documentPath, destination)
@@ -206,4 +210,34 @@ export function treeDecorations(documentPath: string | null, getKnownTitles?: ()
     },
     { decorations: (plugin) => plugin.decorations },
   )
+}
+
+
+/**
+ * 公式 widget:Temml 把 TeX 渲染成 **MathML**(浏览器原生渲染,不需要外部字体 —— 这也是
+ * 这里选 Temml 而不是 KaTeX 的原因:KaTeX 依赖自带字体文件,插件里没法可靠提供)。
+ */
+class MathWidget extends WidgetType {
+  constructor(readonly tex: string) {
+    super()
+  }
+
+  eq(other: MathWidget): boolean {
+    return other.tex === this.tex
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement('span')
+    span.className = 'dsh-cm-math'
+    try {
+      span.innerHTML = temml.renderToString(this.tex, { throwOnError: false })
+    } catch {
+      span.textContent = this.tex
+    }
+    return span
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
 }

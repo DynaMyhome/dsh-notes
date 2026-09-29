@@ -47,6 +47,12 @@ export interface TreePaneProps {
   onRegisterPath: (path: string) => void
   /** 关掉错误提示。 */
   onDismissError: () => void
+  /** 正在行内改名的行 key(`n:<id>` / `c:<id>`)。 */
+  renamingKey?: string | null
+  /** 提交笔记改名(行内输入回车/失焦)。 */
+  onRenameNote?: (note: TreeNote, title: string) => void
+  /** 提交分类改名。 */
+  onRenameCollection?: (id: string, name: string) => void
   toolbar?: React.ReactNode
   header?: React.ReactNode
   /** 就地新建输入条:渲染成树里的**一行**(在目标层级末尾),而不是顶栏压下来。 */
@@ -575,9 +581,40 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                     <IconNote size={13} />
                   )}
                 </span>
+                {props.renamingKey === row.key && (props.onRenameNote !== undefined || props.onRenameCollection !== undefined) ? (
+                <input
+                  className="dsh-notes-rename-input"
+                  defaultValue={row.label}
+                  autoFocus
+                  onFocus={(event) => event.currentTarget.select()}
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      props.onCancelRename?.()
+                    }
+                  }}
+                  onBlur={(event) => {
+                    const value = event.currentTarget.value.trim()
+                    if (value === '' || value === row.label) {
+                      props.onCancelRename?.()
+                      return
+                    }
+                    if (row.kind === 'collection') props.onRenameCollection?.(row.id, value)
+                    else if (row.note !== undefined) props.onRenameNote?.(row.note, value)
+                  }}
+                  onKeyDownCapture={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      event.currentTarget.blur()
+                    }
+                  }}
+                />
+              ) : (
                 <span className="dsh-notes-row-label" title={row.label}>
                   {row.label}
                 </span>
+              )}
                 {row.count !== undefined && row.count > 0 ? <span className="dsh-notes-count">{row.count}</span> : null}
                 {row.badge !== undefined ? <span className="dsh-notes-badge">{row.badge}</span> : null}
               </div>

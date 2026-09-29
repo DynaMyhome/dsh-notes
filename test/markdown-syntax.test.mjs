@@ -84,3 +84,10 @@ test('同一行多个构造互不干扰', () => {
   assert.equal(pick('a ==一== b [[二]] c ==三==\n', 'WikiLink[').length, 1)
   void list
 })
+
+test('公式:$x^2$ / $$x$$ 解析成 InlineMath / BlockMath', () => {
+  assert.deepEqual(pick('a $x^2$ b', 'InlineMath'), ['InlineMath[2-7]'])
+  assert.deepEqual(pick('$$x$$\n', 'BlockMath'), ['BlockMath[0-5]'])
+  assert.equal(pick('价格 $ 100 元\n', 'InlineMath').length, 0)
+  assert.equal(pick('未闭合 $x^2\n', 'InlineMath').length, 0)
+})
