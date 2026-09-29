@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import { call, fetchTree, type Tree, type TreeNote, type TreeRef, type TreeUnfiled } from './api'
+import { EditorPane } from './EditorPane'
 import { TreePane } from './TreePane'
 
 /** 笔记树的宽度范围(px)。 */
@@ -182,18 +183,18 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     [run, t],
   )
 
-  /** 拖放:把笔记归入某个分类(`null` = 顶层/未归类)。 */
+  /** 拖放:把笔记放到某分类的指定位置(`index` 省略 = 末尾)。 */
   const onMoveNote = useCallback(
-    (noteId: string, collectionId: string | null) => {
-      void run('move', { noteId, collectionId }, () => setStatus(t('status.moved')))
+    (noteId: string, collectionId: string | null, index: number | null) => {
+      void run('move', { noteId, collectionId, index }, () => setStatus(t('status.moved')))
     },
     [run, t],
   )
 
-  /** 拖放:把分类挂到另一个分类下(`null` = 顶层)。 */
+  /** 拖放:把分类放到某父分类下的指定位置(`index` 省略 = 末尾)。 */
   const onMoveCollection = useCallback(
-    (collectionId: string, parentId: string | null) => {
-      void run('collection', { op: 'move', collectionId, parentId }, () => setStatus(t('status.moved')))
+    (collectionId: string, parentId: string | null, index: number | null) => {
+      void run('collection', { op: 'move', collectionId, parentId, index }, () => setStatus(t('status.moved')))
     },
     [run, t],
   )
@@ -392,11 +393,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               <div className="dsh-notes-dim dsh-notes-mono">{selectedRef.relPath}</div>
             </div>
           ) : selected !== null ? (
-            <div className="dsh-notes-placeholder">
-              <div className="dsh-notes-placeholder-title">{selected.title}</div>
-              <div className="dsh-notes-dim dsh-notes-mono">{selected.relPath}</div>
-              <div className="dsh-notes-dim">{t('editor.pending')}</div>
-            </div>
+            <EditorPane key={selected.id} t={t} sessionId={sessionId} note={selected} />
           ) : (
             <div className="dsh-notes-empty">{t('editor.noSelection')}</div>
           )}

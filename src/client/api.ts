@@ -24,6 +24,8 @@ export interface TreeNote {
   path: string
   relPath: string
   collectionId: string | null
+  /** 同级手动顺序(越小越靠前);未设过 = Number.MAX_SAFE_INTEGER。 */
+  order?: number
   pinned: boolean
 }
 
@@ -98,6 +100,24 @@ export async function fetchTree(sessionId: string, force = false): Promise<Tree>
   if (force) query.set('force', '1')
   const response = await fetch(`${PREFIX}/tree?${query.toString()}`, { credentials: 'same-origin' })
   return (await unwrap(response)) as Tree
+}
+
+/** 读一篇笔记的正文 + 版本号(编辑器打开时用)。 */
+export async function readNote(
+  sessionId: string,
+  path: string,
+): Promise<{ text: string; version: string; absolutePath: string }> {
+  return call('read', { sessionId, path })
+}
+
+/** 守卫式保存:版本不符时抛 `RouteError('FS_STALE_VERSION')`,带上磁盘版本与内容。 */
+export async function saveNote(
+  sessionId: string,
+  path: string,
+  text: string,
+  expectedVersion: string,
+): Promise<{ version: string; path: string }> {
+  return call('save', { sessionId, path, text, expectedVersion })
 }
 
 /** 调一条写路由。 */
