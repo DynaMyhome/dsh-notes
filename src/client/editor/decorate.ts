@@ -28,6 +28,7 @@ const LINE_CLASS: Record<string, string> = {
   rule: 'dsh-cm-rule',
   code: 'dsh-cm-code-line',
   codeLang: 'dsh-cm-code-lang',
+  codeEnd: 'dsh-cm-code-end',
   frontmatter: 'dsh-cm-frontmatter',
   tableHead: 'dsh-cm-table-head',
   tableRow: 'dsh-cm-table-row',

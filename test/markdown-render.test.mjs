@@ -143,7 +143,8 @@ test('引用:整块行装饰,`>` 非还原态隐藏', () => {
 test('代码围栏:首行 codeLang、其余 code,围栏 ``` 隐藏;代码里的标记语法不参与渲染', () => {
   const text = '```js\nconst a = **不是加粗**\n```\n'
   const descs = decide(text)
-  assert.deepEqual(only(descs, LINE).map((item) => item.cls), ['codeLang', 'code', 'code'])
+  // 首行语言 chip、正文 code、末行围栏 codeEnd(折叠掉)
+  assert.deepEqual(only(descs, LINE).map((item) => item.cls), ['codeLang', 'code', 'codeEnd'])
   assert.equal(only(descs, MARK).length, 0, '代码块里不应产生加粗装饰')
   assert.deepEqual(
     only(descs, HIDE).map((item) => text.slice(item.from, item.to)),
