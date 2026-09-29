@@ -217,7 +217,9 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
     return out
   }, [tree, collapsed, selectedId, t])
 
-  const rootCount = rows.filter((row) => (row.parentId ?? null) === null && row.kind === 'collection').length
+  /** 顶层子项数(拖到空白处 = 追加到顶层末尾)。笔记与分类各自成序,要分开算。 */
+  const rootCollections = rows.filter((row) => row.kind === 'collection' && (row.parentId ?? null) === null && row.dropAs !== '__unfiled').length
+  const rootNotes = rows.filter((row) => row.kind === 'note' && (row.parentId ?? null) === null).length
 
   const toggle = (collectionId: string): void => {
     setCollapsed((current) => {
@@ -318,9 +320,18 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
       {props.header}
       {error !== null ? <div className="dsh-notes-error">{error}</div> : null}
       <div
-        className={`dsh-notes-tree-body${drop !== null && drop.key === '__root' ? ' dsh-notes-drop-root' : ''}`}
+        className={[
+          'dsh-notes-tree-body',
+          dragging !== null ? 'dsh-notes-tree-body-dragging' : '',
+          drop !== null && drop.key === '__root' ? 'dsh-notes-drop-root' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
         onDragOver={(event) => {
           if (dragging === null) return
+          // 行的 dragover 会冒泡到这里;行内已有自己的落点时不能覆盖成「顶层」
+          // (实测:拖到某一行上,标签却显示「放到顶层」)
+          if ((event.target as HTMLElement).closest?.('.dsh-notes-row') != null) return
           event.preventDefault()
           event.dataTransfer.dropEffect = 'move'
           autoScroll(event)
@@ -328,7 +339,7 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
             key: '__root',
             mode: 'inside',
             parentId: null,
-            index: rootCount,
+            index: dragging.kind === 'note' ? rootNotes : rootCollections,
             label: t('tree.topLevel'),
             x: event.clientX,
             y: event.clientY,
@@ -434,6 +445,8 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
             )
           })
         )}
+        {/* 拖到空白处 = 放到顶层末尾:给一条末端指示线,而不是一个框 */}
+        {dragging !== null && drop?.key === '__root' ? <div className="dsh-notes-drop-line" /> : null}
       </div>
 
       {dragging !== null && drop !== null ? (
