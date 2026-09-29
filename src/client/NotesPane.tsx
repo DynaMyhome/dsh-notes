@@ -86,7 +86,13 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   }, [refresh])
 
   useEffect(() => {
-    if (compose !== null) inputRef.current?.focus()
+    if (compose !== null && inputRef.current !== null) {
+      // 每次打开都把输入框清空;输入框是**非受控**的,提交时直接读 DOM ——
+      // 自动输入/输入法(insertText)不一定触发 React 的 onChange,受控绑定会把
+      // 已经敲进去的字吞掉(实测:回车/确定拿到的是空标题)。
+      inputRef.current.value = ''
+      inputRef.current.focus()
+    }
   }, [compose])
 
   /** 跑一条写路由,成功后刷新。 */
@@ -113,9 +119,9 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     [busy, refresh, sessionId, t],
   )
 
-  /** 提交新建输入条。 */
+  /** 提交新建输入条(标题以 DOM 为准)。 */
   const submitCompose = useCallback(async () => {
-    const text = draft.trim()
+    const text = String(inputRef.current?.value ?? draft).trim()
     if (text === '' || compose === null) {
       setCompose(null)
       setDraft('')
@@ -223,9 +229,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         <input
           ref={inputRef}
           className="dsh-notes-input"
-          value={draft}
+          defaultValue=""
           placeholder={compose === 'note' ? t('compose.note') : t('compose.collection')}
-          onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') void submitCompose()
             if (event.key === 'Escape') {
