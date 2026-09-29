@@ -163,6 +163,83 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
 
   const toggleLabel = treeOpen ? t('tree.collapse') : t('tree.expand')
 
+  // 动作区属于**笔记树这一列**(不是区域顶栏):新建笔记 / 新建分类 / 重扫 / 收起。
+  const toolbar = (
+    <>
+      <button
+        type="button"
+        className="dsh-notes-btn"
+        title={t('action.newNote')}
+        aria-label={t('action.newNote')}
+        disabled={busy}
+        onClick={() => {
+          setCompose('note')
+          setDraft('')
+        }}
+      >
+        ＋
+      </button>
+      <button
+        type="button"
+        className="dsh-notes-btn"
+        title={t('action.newCollection')}
+        aria-label={t('action.newCollection')}
+        disabled={busy}
+        onClick={() => {
+          setCompose('collection')
+          setDraft('')
+        }}
+      >
+        ⊞
+      </button>
+      <button
+        type="button"
+        className="dsh-notes-btn"
+        title={t('action.rescan')}
+        aria-label={t('action.rescan')}
+        disabled={busy || loading}
+        onClick={() => {
+          void refresh(true).then(() => setStatus(t('status.rescanned')))
+        }}
+      >
+        ⟳
+      </button>
+      <button
+        type="button"
+        className="dsh-notes-btn"
+        title={toggleLabel}
+        aria-label={toggleLabel}
+        aria-expanded={treeOpen}
+        onClick={() => setTreeOpen((open) => !open)}
+      >
+        {treeOpen ? '⯇' : '⯈'}
+      </button>
+    </>
+  )
+
+  const composeRow =
+    compose === null ? null : (
+      <div className="dsh-notes-compose">
+        <input
+          ref={inputRef}
+          className="dsh-notes-input"
+          value={draft}
+          placeholder={compose === 'note' ? t('compose.note') : t('compose.collection')}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') void submitCompose()
+            if (event.key === 'Escape') {
+              setCompose(null)
+              setDraft('')
+            }
+          }}
+        />
+        <button type="button" className="dsh-notes-btn" onClick={() => void submitCompose()}>
+          {t('compose.ok')}
+        </button>
+      </div>
+    )
+
   return (
     <div className="dsh-notes-root">
       <div className="dsh-notes-header">
@@ -175,54 +252,6 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               : t('tree.summary').replace('{n}', String(tree.stats.notes))}
         </span>
         <span className="dsh-notes-spacer" />
-        <button
-          type="button"
-          className="dsh-notes-btn"
-          title={t('action.newNote')}
-          aria-label={t('action.newNote')}
-          disabled={busy}
-          onClick={() => {
-            setCompose('note')
-            setDraft('')
-          }}
-        >
-          ＋
-        </button>
-        <button
-          type="button"
-          className="dsh-notes-btn"
-          title={t('action.newCollection')}
-          aria-label={t('action.newCollection')}
-          disabled={busy}
-          onClick={() => {
-            setCompose('collection')
-            setDraft('')
-          }}
-        >
-          ⊞
-        </button>
-        <button
-          type="button"
-          className="dsh-notes-btn"
-          title={t('action.rescan')}
-          aria-label={t('action.rescan')}
-          disabled={busy || loading}
-          onClick={() => {
-            void refresh(true).then(() => setStatus(t('status.rescanned')))
-          }}
-        >
-          ⟳
-        </button>
-        <button
-          type="button"
-          className="dsh-notes-btn"
-          title={toggleLabel}
-          aria-label={toggleLabel}
-          aria-expanded={treeOpen}
-          onClick={() => setTreeOpen((open) => !open)}
-        >
-          {treeOpen ? '⯇' : '⯈'}
-        </button>
       </div>
       {status !== null ? (
         <div className="dsh-notes-status" onAnimationEnd={() => setStatus(null)}>
@@ -233,33 +262,14 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         {treeOpen ? (
           <>
             <aside className="dsh-notes-tree" style={{ width: `${treeWidth}px` }}>
-              {compose !== null ? (
-                <div className="dsh-notes-compose">
-                  <input
-                    ref={inputRef}
-                    className="dsh-notes-input"
-                    value={draft}
-                    placeholder={compose === 'note' ? t('compose.note') : t('compose.collection')}
-                    onChange={(event) => setDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') void submitCompose()
-                      if (event.key === 'Escape') {
-                        setCompose(null)
-                        setDraft('')
-                      }
-                    }}
-                  />
-                  <button type="button" className="dsh-notes-btn" onClick={() => void submitCompose()}>
-                    {t('compose.ok')}
-                  </button>
-                </div>
-              ) : null}
               <TreePane
                 t={t}
                 tree={tree}
                 loading={loading}
                 error={error}
                 selectedId={selected?.id ?? null}
+                toolbar={toolbar}
+                header={composeRow}
                 onSelectNote={(note) => {
                   setSelected(note)
                   setSelectedRef(null)
@@ -283,15 +293,56 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             />
           </>
         ) : (
-          <button
-            type="button"
-            className="dsh-notes-rail"
-            title={toggleLabel}
-            aria-label={toggleLabel}
-            onClick={() => setTreeOpen(true)}
-          >
-            ›
-          </button>
+          <div className="dsh-notes-rail">
+            <button
+              type="button"
+              className="dsh-notes-btn"
+              title={t('action.newNote')}
+              aria-label={t('action.newNote')}
+              onClick={() => {
+                setTreeOpen(true)
+                setCompose('note')
+                setDraft('')
+              }}
+            >
+              ＋
+            </button>
+            <button
+              type="button"
+              className="dsh-notes-btn"
+              title={t('action.newCollection')}
+              aria-label={t('action.newCollection')}
+              onClick={() => {
+                setTreeOpen(true)
+                setCompose('collection')
+                setDraft('')
+              }}
+            >
+              ⊞
+            </button>
+            <button
+              type="button"
+              className="dsh-notes-btn"
+              title={t('action.rescan')}
+              aria-label={t('action.rescan')}
+              disabled={busy || loading}
+              onClick={() => {
+                void refresh(true).then(() => setStatus(t('status.rescanned')))
+              }}
+            >
+              ⟳
+            </button>
+            <button
+              type="button"
+              className="dsh-notes-btn"
+              title={toggleLabel}
+              aria-label={toggleLabel}
+              aria-expanded={false}
+              onClick={() => setTreeOpen(true)}
+            >
+              ▸
+            </button>
+          </div>
         )}
         <section className="dsh-notes-editor">
           {selectedRef !== null ? (
