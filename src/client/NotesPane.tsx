@@ -95,6 +95,20 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     }
   }, [compose])
 
+  // 取消的三条路:点到别处 / Escape / ×。抓 pointerdown 而不是 click,
+  // 这样点树里的行时输入条先收起、行的点击照常生效。
+  useEffect(() => {
+    if (compose === null) return undefined
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as HTMLElement | null
+      if (target !== null && target.closest('.dsh-notes-compose') !== null) return
+      setCompose(null)
+      setDraft('')
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [compose])
+
   /** 跑一条写路由,成功后刷新。 */
   const run = useCallback(
     async (action: string, payload: Record<string, unknown>, done?: (value: any) => void) => {
@@ -119,9 +133,10 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     [busy, refresh, sessionId, t],
   )
 
-  /** 提交新建输入条(标题以 DOM 为准)。 */
+  /** 提交新建输入条(标题以 DOM 为准 —— 不信 React state,也不只信一个 ref)。 */
   const submitCompose = useCallback(async () => {
-    const text = String(inputRef.current?.value ?? draft).trim()
+    const domValue = (document.querySelector('.dsh-notes-input') as HTMLInputElement | null)?.value
+    const text = String(domValue ?? inputRef.current?.value ?? draft).trim()
     if (text === '' || compose === null) {
       setCompose(null)
       setDraft('')
@@ -179,7 +194,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         aria-label={t('action.newNote')}
         disabled={busy}
         onClick={() => {
-          setCompose('note')
+          setCompose((current) => (current === 'note' ? null : 'note'))
           setDraft('')
         }}
       >
@@ -192,7 +207,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         aria-label={t('action.newCollection')}
         disabled={busy}
         onClick={() => {
-          setCompose('collection')
+          setCompose((current) => (current === 'collection' ? null : 'collection'))
           setDraft('')
         }}
       >
@@ -241,6 +256,18 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         />
         <button type="button" className="dsh-notes-btn" onClick={() => void submitCompose()}>
           {t('compose.ok')}
+        </button>
+        <button
+          type="button"
+          className="dsh-notes-btn"
+          title={t('compose.cancel')}
+          aria-label={t('compose.cancel')}
+          onClick={() => {
+            setCompose(null)
+            setDraft('')
+          }}
+        >
+          ×
         </button>
       </div>
     )
