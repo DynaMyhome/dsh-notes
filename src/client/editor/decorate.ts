@@ -14,6 +14,7 @@ import { ensureSyntaxTree } from '@codemirror/language'
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 
 import { HIDE, LINE, MARK, WIDGET, decideDecorations } from '../../../lib/markdown-render.js'
+import { isSourceMode } from './mode'
 import { resolveImageUrl } from './setup'
 
 /** 行装饰类名映射(与 setup.ts 的 theme 对应)。 */
@@ -139,6 +140,8 @@ export function decorateFromTree(
   getKnownTitles?: () => Set<string>,
 ): DecorationSet {
   const state = view.state
+  // 源码模式:一个装饰都不加(看到的就是磁盘上的纯 markdown)
+  if (isSourceMode()) return Decoration.none
   // 全量解析(带 timeout 兜底:解析不出来就当没装饰,绝不阻塞输入)
   const tree = ensureSyntaxTree(state, state.doc.length, 60)
   if (tree === null) return Decoration.none
@@ -148,6 +151,8 @@ export function decorateFromTree(
     text,
     selection: selectionRanges(state),
     knownTitles: getKnownTitles?.() ?? new Set<string>(),
+    // 预览模式:永不还原源码(Typora 手感)—— 标记一直隐藏,光标进入也不露
+    reveal: false,
   })
   const ranges = []
   for (const description of descriptions) {

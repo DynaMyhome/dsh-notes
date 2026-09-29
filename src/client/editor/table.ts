@@ -13,6 +13,8 @@ import { EditorState, RangeSet, StateField, type Extension } from '@codemirror/s
 import { syntaxTree, ensureSyntaxTree } from '@codemirror/language'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 
+import { isSourceMode } from './mode'
+
 /** 一个单元格:文本 + 它在**文档中的绝对范围**。 */
 export interface TableCell {
   text: string
@@ -93,12 +95,33 @@ class TableWidget extends WidgetType {
   toDOM(view: EditorView): HTMLElement {
     const table = document.createElement('table')
     table.className = 'dsh-cm-table'
-    const focusCell = (cell: TableCell | undefined) => (event: Event) => {
-      if (cell === undefined) return
+    // 点单元格 = **就地编辑**(预览模式下表格不翻回源码):该格换成 input,
+    // Enter/失焦提交、Esc 取消,提交后写回源码对应区间(靠 from/to 精确定位)。
+    const editCell = (cell: TableCell) => (event: Event) => {
       event.preventDefault()
-      const target = Math.min(cell.from, view.state.doc.length)
-      view.dispatch({ selection: { anchor: target } })
-      view.focus()
+      const host = event.currentTarget as HTMLElement
+      const input = document.createElement('input')
+      input.className = 'dsh-cm-table-input'
+      input.value = cell.text
+      const commit = (save: boolean): void => {
+        if (save && input.value !== cell.text) {
+          view.dispatch({ changes: { from: cell.from, to: cell.to, insert: input.value } })
+        }
+        view.focus()
+      }
+      input.addEventListener('keydown', (keyEvent) => {
+        if (keyEvent.key === 'Enter') {
+          keyEvent.preventDefault()
+          commit(true)
+        } else if (keyEvent.key === 'Escape') {
+          keyEvent.preventDefault()
+          commit(false)
+        }
+      })
+      input.addEventListener('blur', () => commit(true))
+      host.replaceChildren(input)
+      input.focus()
+      input.select()
     }
     if (this.model.header.length > 0) {
       const head = document.createElement('thead')
@@ -106,7 +129,7 @@ class TableWidget extends WidgetType {
       for (const cell of this.model.header) {
         const th = document.createElement('th')
         th.textContent = cell.text
-        th.addEventListener('mousedown', focusCell(cell))
+        th.addEventListener('mousedown', editCell(cell))
         tr.appendChild(th)
       }
       head.appendChild(tr)
@@ -118,7 +141,7 @@ class TableWidget extends WidgetType {
       for (const cell of row) {
         const td = document.createElement('td')
         td.textContent = cell.text
-        td.addEventListener('mousedown', focusCell(cell))
+        td.addEventListener('mousedown', editCell(cell))
         tr.appendChild(td)
       }
       body.appendChild(tr)
@@ -147,20 +170,90 @@ function selectionTouches(state: EditorState, from: number, to: number): boolean
 
 /** 构建所有块级表格装饰。 */
 export function buildTableDecorations(state: EditorState): DecorationSet {
+  // 源码模式:不加任何块级装饰
+  if (isSourceMode()) return Decoration.none
   const tree = ensureSyntaxTree(state, state.doc.length, 60)
   if (tree === null) return Decoration.none
   const ranges = []
   tree.iterate({
     enter: (node) => {
-      if (node.name !== 'Table') return
-      if (selectionTouches(state, node.from, node.to)) return
-      const source = state.doc.sliceString(node.from, node.to)
-      const model = parseTable(source, node.from)
-      if (model.header.length === 0) return
-      ranges.push(Decoration.replace({ widget: new TableWidget(model, node.from), block: true }).range(node.from, node.to))
+      // 表格:渲染成真 <table>(预览模式**永不翻回源码**,单元格就地编辑,见 TableWidget)
+      if (node.name === 'Table') {
+        const source = state.doc.sliceString(node.from, node.to)
+        const model = parseTable(source, node.from)
+        if (model.header.length === 0) return
+        ranges.push(Decoration.replace({ widget: new TableWidget(model, node.from), block: true }).range(node.from, node.to))
+        return
+      }
+      // 代码围栏:渲染成卡片(顶栏 = 语言 + 复制按钮,正文 = 等宽代码)
+      if (node.name === 'FencedCode') {
+        const source = state.doc.sliceString(node.from, node.to)
+        ranges.push(Decoration.replace({ widget: new CodeCardWidget(source), block: true }).range(node.from, node.to))
+      }
     },
   })
   return RangeSet.of(ranges, true)
+}
+
+/**
+ * 代码块卡片:圆角 + 顶栏(语言名 / 复制按钮)+ 等宽正文。
+ *
+ * 说明:按语言**上色**需要各语言的解析器(未安装),所以正文先给等宽 + 主题底色;
+ * 复制按钮走剪贴板,复制的是去掉围栏后的纯代码。
+ */
+class CodeCardWidget extends WidgetType {
+  constructor(readonly source: string) {
+    super()
+  }
+
+  /** 拆出语言与代码正文。 */
+  private parts(): { language: string; code: string } {
+    const lines = this.source.split(/\r?\n/)
+    const first = lines[0] ?? ''
+    const last = lines[lines.length - 1] ?? ''
+    const language = /^\s*(?:```|~~~)\s*(\S*)/.exec(first)?.[1] ?? ''
+    const body = /^\s*(?:```|~~~)/.test(last) ? lines.slice(1, -1) : lines.slice(1)
+    return { language, code: body.join('\n') }
+  }
+
+  eq(other: CodeCardWidget): boolean {
+    return other.source === this.source
+  }
+
+  toDOM(): HTMLElement {
+    const { language, code } = this.parts()
+    const card = document.createElement('div')
+    card.className = 'dsh-cm-code-card'
+    const bar = document.createElement('div')
+    bar.className = 'dsh-cm-code-bar'
+    const label = document.createElement('span')
+    label.className = 'dsh-cm-code-lang-label'
+    label.textContent = language === '' ? 'text' : language
+    const copy = document.createElement('button')
+    copy.type = 'button'
+    copy.className = 'dsh-cm-code-copy'
+    copy.textContent = '复制'
+    copy.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      void navigator.clipboard?.writeText(code)
+      copy.textContent = '已复制'
+      window.setTimeout(() => {
+        copy.textContent = '复制'
+      }, 1200)
+    })
+    bar.append(label, copy)
+    const pre = document.createElement('pre')
+    pre.className = 'dsh-cm-code-body'
+    const codeEl = document.createElement('code')
+    codeEl.textContent = code
+    pre.appendChild(codeEl)
+    card.append(bar, pre)
+    return card
+  }
+
+  ignoreEvent(): boolean {
+    return false
+  }
 }
 
 /** 导出成扩展(塞进编辑器 extensions 即可)。 */
