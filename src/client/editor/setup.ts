@@ -264,7 +264,10 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
           if (name === 'InlineCode') codeRanges.push({ from: node.from, to: node.to })
           // 标记符号:非活动行隐藏
           if (!onActiveLine) {
-            for (const child of node.node.children) {
+            // 注意:`SyntaxNode.children` 对无子节点的节点返回 **null**(不是空数组),
+            // 直接 for..of 会抛 "children is not iterable",而 CM6 会把这当成
+            // 「CodeMirror plugin crashed」并**丢掉整个装饰层**(实测就是这样)。
+            for (const child of node.node.children ?? []) {
               if (MARKER_NODES.has(child.name)) add(child.from, child.to, hide)
             }
           }
@@ -273,7 +276,7 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
 
         // 标题的 `#`:非活动行隐藏
         if (HEADING_LINES[name] !== undefined && !onActiveLine) {
-          for (const child of node.node.children) {
+          for (const child of node.node.children ?? []) {
             if (child.name === 'HeaderMark') add(child.from, child.to, hide)
           }
           return
@@ -283,7 +286,7 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
         if (name === 'Link') {
           add(node.from, node.to, markLink)
           if (!onActiveLine) {
-            for (const child of node.node.children) {
+            for (const child of node.node.children ?? []) {
               if (child.name === 'URL') add(child.from, child.to, hide)
             }
           }
@@ -353,6 +356,31 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
   )
 }
 
+/**
+ * 安全的装饰构建:装饰层出错不能把整个编辑器带崩,也不能只留一句
+ * `CodeMirror plugin crashed: {}`(CM6 会吞掉错误对象)。
+ */
+function safeBuild(view: EditorView, documentPath: string | null): DecorationSet {
+  try {
+    return buildDecorations(view, documentPath)
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('[dsh-notes] 装饰层构建失败(退化为纯源码视图):', error)
+    return Decoration.none
+  }
+}
+
+/** 在当前选区插入图片片段,并**选中占位路径**便于直接替换。 */
+export function insertImageSnippet(view: EditorView): void {
+  const range = view.state.selection.main
+  const snippet = '![](图片路径)'
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: snippet },
+    selection: { anchor: range.from + 4, head: range.from + snippet.length - 1 },
+  })
+  view.focus()
+}
+
 /** 装饰插件。 */
 function livePreview(documentPath: string | null): Extension {
   return ViewPlugin.fromClass(
@@ -360,12 +388,12 @@ function livePreview(documentPath: string | null): Extension {
       decorations: DecorationSet
 
       constructor(view: EditorView) {
-        this.decorations = buildDecorations(view, documentPath)
+        this.decorations = safeBuild(view, documentPath)
       }
 
       update(update: ViewUpdate): void {
         if (update.docChanged || update.selectionSet || update.viewportChanged) {
-          this.decorations = buildDecorations(update.view, documentPath)
+          this.decorations = safeBuild(update.view, documentPath)
         }
       }
     },
@@ -458,6 +486,8 @@ export interface EditorHandle {
   focus: () => void
   destroy: () => void
   getDoc: () => string
+  /** 把光标放到某一行并滚到可视区顶部(大纲跳转用)。 */
+  scrollToLine: (line: number) => void
 }
 
 /** 创建编辑器。 */
@@ -467,6 +497,7 @@ export function createEditor(options: {
   documentPath: string | null
   onChange: () => void
   onSave: () => void
+  onSelection?: (line: number) => void
 }): EditorHandle {
   const state = EditorState.create({
     doc: options.doc,
@@ -490,6 +521,9 @@ export function createEditor(options: {
       ]),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) options.onChange()
+        if (update.selectionSet && options.onSelection !== undefined) {
+          options.onSelection(update.state.doc.lineAt(update.state.selection.main.head).number)
+        }
       }),
     ],
   })
@@ -502,6 +536,16 @@ export function createEditor(options: {
     focus: () => view.focus(),
     destroy: () => view.destroy(),
     getDoc: () => view.state.doc.toString(),
+    scrollToLine: (line: number) => {
+      const total = view.state.doc.lines
+      const target = Math.max(1, Math.min(total, line))
+      const position = view.state.doc.line(target).from
+      view.dispatch({
+        selection: { anchor: position },
+        effects: EditorView.scrollIntoView(position, { y: 'start', yMargin: 56 }),
+      })
+      view.focus()
+    },
   }
 }
 

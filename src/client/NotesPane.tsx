@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import { call, fetchTree, type Tree, type TreeNote, type TreeRef, type TreeUnfiled } from './api'
 import { EditorPane } from './EditorPane'
+import { OutlinePane, type OutlineItem } from './OutlinePane'
 import { TreePane } from './TreePane'
 
 /** 笔记树的宽度范围(px)。 */
@@ -50,6 +51,14 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [compose, setCompose] = useState<ComposeMode | null>(null)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  /** 左列的两个标签页:文件树 / 大纲(Typora 的两个侧栏页)。 */
+  const [panelTab, setPanelTab] = useState<'files' | 'outline'>('files')
+  /** 当前笔记的标题树(由编辑器回传)。 */
+  const [outline, setOutline] = useState<OutlineItem[]>([])
+  /** 光标行(大纲高亮当前小节)。 */
+  const [cursorLine, setCursorLine] = useState<number | null>(null)
+  /** 大纲跳转请求(nonce 变化触发一次)。 */
+  const [jump, setJump] = useState<{ line: number; nonce: number }>({ line: 1, nonce: 0 })
   const drag = useRef<{ startX: number; startWidth: number } | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -301,26 +310,60 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         {treeOpen ? (
           <>
             <aside className="dsh-notes-tree" style={{ width: `${treeWidth}px` }}>
-              <TreePane
-                t={t}
-                tree={tree}
-                loading={loading}
-                error={error}
-                selectedId={selected?.id ?? null}
-                toolbar={toolbar}
-                header={composeRow}
-                onSelectNote={(note) => {
-                  setSelected(note)
-                  setSelectedRef(null)
-                }}
-                onSelectRef={(ref) => {
-                  setSelectedRef(ref)
-                  setSelected(null)
-                }}
-                onFileAction={onFileAction}
-                onMoveNote={onMoveNote}
-                onMoveCollection={onMoveCollection}
-              />
+              <div className="dsh-notes-column">
+                <div className="dsh-notes-panel-tabs" role="tablist">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={panelTab === 'files'}
+                    className={`dsh-notes-panel-tab${panelTab === 'files' ? ' dsh-notes-panel-tab-on' : ''}`}
+                    onClick={() => setPanelTab('files')}
+                  >
+                    {t('panel.files')}
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={panelTab === 'outline'}
+                    className={`dsh-notes-panel-tab${panelTab === 'outline' ? ' dsh-notes-panel-tab-on' : ''}`}
+                    onClick={() => setPanelTab('outline')}
+                  >
+                    {t('panel.outline')}
+                  </button>
+                  {panelTab === 'outline' && outline.length > 0 ? (
+                    <span className="dsh-notes-count">{outline.length}</span>
+                  ) : null}
+                </div>
+                {panelTab === 'files' ? (
+                  <TreePane
+                    t={t}
+                    tree={tree}
+                    loading={loading}
+                    error={error}
+                    selectedId={selected?.id ?? null}
+                    toolbar={toolbar}
+                    header={composeRow}
+                    onSelectNote={(note) => {
+                      setSelected(note)
+                      setSelectedRef(null)
+                    }}
+                    onSelectRef={(ref) => {
+                      setSelectedRef(ref)
+                      setSelected(null)
+                    }}
+                    onFileAction={onFileAction}
+                    onMoveNote={onMoveNote}
+                    onMoveCollection={onMoveCollection}
+                  />
+                ) : (
+                  <OutlinePane
+                    t={t}
+                    items={outline}
+                    activeLine={cursorLine}
+                    onJump={(line) => setJump({ line, nonce: jump.nonce + 1 })}
+                  />
+                )}
+              </div>
             </aside>
             <div
               className="dsh-notes-resizer"
@@ -393,7 +436,15 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               <div className="dsh-notes-dim dsh-notes-mono">{selectedRef.relPath}</div>
             </div>
           ) : selected !== null ? (
-            <EditorPane key={selected.id} t={t} sessionId={sessionId} note={selected} />
+            <EditorPane
+              key={selected.id}
+              t={t}
+              sessionId={sessionId}
+              note={selected}
+              onOutline={setOutline}
+              onCursorLine={setCursorLine}
+              jumpTo={jump}
+            />
           ) : (
             <div className="dsh-notes-empty">{t('editor.noSelection')}</div>
           )}

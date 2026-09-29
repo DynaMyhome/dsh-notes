@@ -12,8 +12,16 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
+import { parseOutline } from '../../lib/outline.js'
 import { RouteError, readNote, saveNote, type TreeNote } from './api'
-import { createEditor, toggleLinePrefix, wrapSelection, type EditorHandle } from './editor/setup'
+import {
+  createEditor,
+  insertImageSnippet,
+  toggleLinePrefix,
+  wrapSelection,
+  type EditorHandle,
+} from './editor/setup'
+import type { OutlineItem } from './OutlinePane'
 import {
   IconBold,
   IconCheck,
@@ -35,6 +43,12 @@ export interface EditorPaneProps {
   t: (key: string) => string
   sessionId: string
   note: TreeNote
+  /** 正文标题树变化(喂给左侧大纲)。 */
+  onOutline?: (items: OutlineItem[]) => void
+  /** 光标所在行变化(大纲高亮当前小节)。 */
+  onCursorLine?: (line: number) => void
+  /** 请求跳转到某一行(`nonce` 变化即触发一次)。 */
+  jumpTo?: { line: number; nonce: number } | null
 }
 
 /** 保存状态。 */
@@ -46,6 +60,10 @@ type SaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
  */
 export function EditorPane(props: EditorPaneProps): React.ReactElement {
   const { t, sessionId, note } = props
+  const outlineRef = useRef(props.onOutline)
+  const cursorRef = useRef(props.onCursorLine)
+  outlineRef.current = props.onOutline
+  cursorRef.current = props.onCursorLine
   const hostRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<EditorHandle | null>(null)
   const versionRef = useRef<string>('')
@@ -97,6 +115,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
         versionRef.current = String(loaded.version)
         setDocPath(loaded.absolutePath)
         setLength(loaded.text.length)
+        outlineRef.current?.(parseOutline(loaded.text))
         const host = hostRef.current
         if (host === null) return
         editorRef.current?.destroy()
@@ -107,12 +126,15 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
           onChange: () => {
             dirtyRef.current = true
             setSaveState('dirty')
-            setLength(editorRef.current?.getDoc().length ?? 0)
+            const text = editorRef.current?.getDoc() ?? ''
+            setLength(text.length)
+            outlineRef.current?.(parseOutline(text))
             if (timerRef.current !== null) window.clearTimeout(timerRef.current)
             timerRef.current = window.setTimeout(() => {
               void save()
             }, AUTOSAVE_MS)
           },
+          onSelection: (line: number) => cursorRef.current?.(line),
           onSave: () => {
             if (timerRef.current !== null) window.clearTimeout(timerRef.current)
             void save()
@@ -132,8 +154,16 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       timerRef.current = null
       editorRef.current?.destroy()
       editorRef.current = null
+      outlineRef.current?.([])
     }
   }, [note.path, save, sessionId])
+
+  /** 大纲点击 → 跳到该标题行。 */
+  useEffect(() => {
+    const target = props.jumpTo
+    if (target === null || target === undefined) return
+    editorRef.current?.scrollToLine(target.line)
+  }, [props.jumpTo])
 
   /** 冲突:用磁盘上的内容重新载入。 */
   const reload = useCallback(() => {
@@ -202,7 +232,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
           <button type="button" className="dsh-notes-btn" title={t('editor.code')} aria-label={t('editor.code')} onClick={() => apply((e) => wrapSelection(e.view, '`'))}>
             <IconCode />
           </button>
-          <button type="button" className="dsh-notes-btn" title={t('editor.image')} aria-label={t('editor.image')} onClick={() => apply((e) => wrapSelection(e.view, '![', '](path/to/image.png)'))}>
+          <button type="button" className="dsh-notes-btn" title={t('editor.image')} aria-label={t('editor.image')} onClick={() => apply((e) => insertImageSnippet(e.view))}>
             <IconImage />
           </button>
           <button type="button" className="dsh-notes-btn" title={t('editor.saveNow')} aria-label={t('editor.saveNow')} onClick={() => void save()}>
