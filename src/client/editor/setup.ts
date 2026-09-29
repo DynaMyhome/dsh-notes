@@ -707,6 +707,8 @@ const theme = EditorView.theme({
     fontSize: '0.9em',
     lineHeight: '1.6',
   },
+  '.dsh-cm-math': { padding: '0 1px' },
+  '.dsh-cm-math math': { fontSize: '1.02em' },
   // 表格单元格就地编辑的输入框
   '.dsh-cm-table-input': {
     width: '100%',

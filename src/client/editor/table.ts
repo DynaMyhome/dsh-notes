@@ -104,8 +104,14 @@ class TableWidget extends WidgetType {
       input.className = 'dsh-cm-table-input'
       input.value = cell.text
       const commit = (save: boolean): void => {
-        if (save && input.value !== cell.text) {
-          view.dispatch({ changes: { from: cell.from, to: cell.to, insert: input.value } })
+        const value = input.value
+        if (save && value !== cell.text) {
+          // 有改动:dispatch 会让 StateField 重建 widget,DOM 自然还原
+          view.dispatch({ changes: { from: cell.from, to: cell.to, insert: value } })
+        } else {
+          // 没改动(或取消):**手动把 input 换回文本**。不然连点几个单元格
+          // 就会留下一排输入框(不 dispatch 就不会重建)—— 这是实测踩到的。
+          host.replaceChildren(document.createTextNode(cell.text))
         }
         view.focus()
       }

@@ -120,6 +120,15 @@ export async function saveNote(
   return call('save', { sessionId, path, text, expectedVersion })
 }
 
+/** 重命名笔记(显式动作;Host 只做同目录 rename,目标存在则拒绝)。 */
+export async function renameNote(
+  sessionId: string,
+  noteId: string,
+  title: string,
+): Promise<{ id: string; path: string; title: string }> {
+  return call('rename', { sessionId, noteId, title })
+}
+
 /** 置顶 / 取消置顶。 */
 export async function pinNote(sessionId: string, noteId: string, pinned: boolean): Promise<boolean> {
   return call('pin', { sessionId, noteId, pinned })
