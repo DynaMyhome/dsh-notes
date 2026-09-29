@@ -127,6 +127,8 @@ const EN: Record<string, string> = {
   'compose.collection': 'Collection name, Enter to create',
   'compose.ok': 'OK',
   'status.created': 'Created and registered',
+  'status.untitled': 'Untitled',
+  'status.newCollection': 'New collection',
   'status.collectionCreated': 'Collection created',
   'status.registered': 'Added to the notes tree',
   'status.moved': 'Moved',
