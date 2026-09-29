@@ -64,6 +64,13 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [jump, setJump] = useState<{ line: number; nonce: number }>({ line: 1, nonce: 0 })
   /** 快速打开(Ctrl/Cmd+P、Ctrl/Cmd+K;仅当焦点在笔记区域内)。 */
   const [quickOpen, setQuickOpen] = useState(false)
+  /** 大纲拖拽重排章节的请求(nonce 变化触发一次)。 */
+  const [outlineMove, setOutlineMove] = useState<{
+    fromLine: number
+    toLine: number
+    mode: 'before' | 'after'
+    nonce: number
+  } | null>(null)
   const drag = useRef<{ startX: number; startWidth: number } | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -509,6 +516,9 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     items={outline}
                     activeLine={cursorLine}
                     onJump={(line) => setJump({ line, nonce: jump.nonce + 1 })}
+                    onMove={(fromLine, toLine, mode) =>
+                      setOutlineMove({ fromLine, toLine, mode, nonce: (outlineMove?.nonce ?? 0) + 1 })
+                    }
                   />
                 )}
               </div>
@@ -595,6 +605,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               onCursorLine={setCursorLine}
               onWikiLink={onWikiLink}
               getKnownTitles={knownTitles}
+              outlineMove={outlineMove}
               jumpTo={jump}
             />
           ) : (

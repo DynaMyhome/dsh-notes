@@ -49,6 +49,8 @@ export interface EditorPaneProps {
   onCursorLine?: (line: number) => void
   /** 请求跳转到某一行(`nonce` 变化即触发一次)。 */
   jumpTo?: { line: number; nonce: number } | null
+  /** 大纲拖拽重排章节的请求(`nonce` 变化即触发一次)。 */
+  outlineMove?: { fromLine: number; toLine: number; mode: 'before' | 'after'; nonce: number } | null
   /** 点 `[[双链]]`(外壳决定打开还是新建)。 */
   onWikiLink?: (title: string) => void
   /** 当前工作区已知标题(双链上色用)。 */
@@ -188,6 +190,13 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     if (target === null || target === undefined) return
     editorRef.current?.scrollToLine(target.line)
   }, [props.jumpTo])
+
+  /** 大纲拖拽 → 在正文里搬移整个章节(纯文本搬移,见 lib/section.js,有单测)。 */
+  useEffect(() => {
+    const request = props.outlineMove
+    if (request === null || request === undefined) return
+    editorRef.current?.moveSection(request.fromLine, request.toLine, request.mode)
+  }, [props.outlineMove])
 
   /** 冲突:用磁盘上的内容重新载入。 */
   const reload = useCallback(() => {
