@@ -120,8 +120,22 @@ export async function saveNote(
   return call('save', { sessionId, path, text, expectedVersion })
 }
 
-/** 调一条写路由。 */
-export async function call<T = any>(action: string, payload: Record<string, unknown>): Promise<T> {
+/** 置顶 / 取消置顶。 */
+export async function pinNote(sessionId: string, noteId: string, pinned: boolean): Promise<boolean> {
+  return call('pin', { sessionId, noteId, pinned })
+}
+
+/** 把外部内容导入成笔记(拖进来的 `.md`)。 */
+export async function importNote(
+  sessionId: string,
+  name: string,
+  text: string,
+  collectionId: string | null = null,
+): Promise<TreeNote> {
+  return call('import', { sessionId, name, text, collectionId })
+}
+
+/** 调一条写路由。 */export async function call<T = any>(action: string, payload: Record<string, unknown>): Promise<T> {
   const response = await fetch(`${PREFIX}/${action}`, {
     method: 'POST',
     credentials: 'same-origin',

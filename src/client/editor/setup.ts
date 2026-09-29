@@ -32,9 +32,17 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from '@codemirror/view'
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
+import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
+import { defaultKeymap, history, historyKeymap, indentLess, indentMore, indentWithTab } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language'
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import {
+  deleteMarkupBackward,
+  insertNewlineContinueMarkup,
+  markdown,
+  markdownKeymap,
+  markdownLanguage,
+} from '@codemirror/lang-markdown'
+import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { tags as tag } from '@lezer/highlight'
 
 /** 行内隐藏/标记装饰。 */
@@ -45,6 +53,9 @@ const markStrike = Decoration.mark({ class: 'dsh-cm-strike' })
 const markHighlight = Decoration.mark({ class: 'dsh-cm-highlight' })
 const markLink = Decoration.mark({ class: 'dsh-cm-link' })
 const markUrl = Decoration.mark({ class: 'dsh-cm-url' })
+/** `[[双链]]`:已存在 / 还没建。 */
+const markWiki = Decoration.mark({ class: 'dsh-cm-wiki' })
+const markWikiNew = Decoration.mark({ class: 'dsh-cm-wiki-new' })
 const hide = Decoration.replace({})
 
 /** 行级装饰(标题/引用/分隔线)。 */
@@ -217,7 +228,11 @@ function activeLines(state: EditorState): Set<number> {
 }
 
 /** 计算一次可见区的装饰集。 */
-function buildDecorations(view: EditorView, documentPath: string | null): DecorationSet {
+function buildDecorations(
+  view: EditorView,
+  documentPath: string | null,
+  getKnownTitles?: () => Set<string>,
+): DecorationSet {
   const state = view.state
   // 先收集、最后统一由 `RangeSet.of(..., true)` 排序:
   // 行装饰与同一位置的「标记替换」会落在**同一个 from**,用 RangeSetBuilder
@@ -353,6 +368,21 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
     add(range.from, range.to, isMarker ? hide : markHighlight)
   }
 
+  // `[[双链]]`:lezer 也不认,同样按区间处理;能对上已有笔记的用实色,否则虚线(点了会新建)
+  const known = getKnownTitles?.() ?? new Set<string>()
+  for (const { from, to } of view.visibleRanges) {
+    const text = state.doc.sliceString(from, to)
+    const re = /\[\[([^\]\n|]{1,200})(\|[^\]\n]{0,200})?\]\]/g
+    let match: RegExpExecArray | null
+    while ((match = re.exec(text)) !== null) {
+      const start = from + match.index
+      const end = start + match[0].length
+      if (codeRanges.some((range) => start < range.to && end > range.from)) continue
+      const target = match[1].trim()
+      add(start, end, known.has(target) ? markWiki : markWikiNew)
+    }
+  }
+
   return RangeSet.of(
     list.map((item) => item.deco.range(item.from, item.to)),
     true,
@@ -363,9 +393,13 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
  * 安全的装饰构建:装饰层出错不能把整个编辑器带崩,也不能只留一句
  * `CodeMirror plugin crashed: {}`(CM6 会吞掉错误对象)。
  */
-function safeBuild(view: EditorView, documentPath: string | null): DecorationSet {
+function safeBuild(
+  view: EditorView,
+  documentPath: string | null,
+  getKnownTitles?: () => Set<string>,
+): DecorationSet {
   try {
-    return buildDecorations(view, documentPath)
+    return buildDecorations(view, documentPath, getKnownTitles)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('[dsh-notes] 装饰层构建失败(退化为纯源码视图):', error)
@@ -385,18 +419,18 @@ export function insertImageSnippet(view: EditorView): void {
 }
 
 /** 装饰插件。 */
-function livePreview(documentPath: string | null): Extension {
+function livePreview(documentPath: string | null, getKnownTitles?: () => Set<string>): Extension {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet
 
       constructor(view: EditorView) {
-        this.decorations = safeBuild(view, documentPath)
+        this.decorations = safeBuild(view, documentPath, getKnownTitles)
       }
 
       update(update: ViewUpdate): void {
         if (update.docChanged || update.selectionSet || update.viewportChanged) {
-          this.decorations = safeBuild(update.view, documentPath)
+          this.decorations = safeBuild(update.view, documentPath, getKnownTitles)
         }
       }
     },
@@ -451,6 +485,16 @@ const theme = EditorView.theme({
     padding: '1px 0',
   },
   '.dsh-cm-link': { color: 'var(--dsw-alias-brand-primary)', textDecoration: 'none' },
+  '.dsh-cm-wiki': {
+    color: 'var(--dsw-alias-brand-primary)',
+    borderBottom: '1px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 45%, transparent)',
+    cursor: 'pointer',
+  },
+  '.dsh-cm-wiki-new': {
+    color: 'var(--dsw-alias-label-secondary)',
+    borderBottom: '1px dashed var(--dsw-alias-border-l2)',
+    cursor: 'pointer',
+  },
   '.dsh-cm-url': { color: 'var(--dsw-alias-label-secondary)' },
   '.cm-dsh-rule': { borderTop: '1px solid var(--dsw-alias-border-l1)' },
   '.dsh-cm-frontmatter': {
@@ -501,6 +545,12 @@ export function createEditor(options: {
   onChange: () => void
   onSave: () => void
   onSelection?: (line: number) => void
+  /** 粘贴/拖入图片时回调(外壳负责上传到资产目录并插入链接)。 */
+  onImageFile?: (file: File) => void
+  /** 点击 `[[双链]]` 时回调(外壳决定打开还是新建)。 */
+  onWikiLink?: (title: string) => void
+  /** 当前工作区已知的笔记标题(双链能不能对上)。 */
+  getKnownTitles?: () => Set<string>
 }): EditorHandle {
   const state = EditorState.create({
     doc: options.doc,
@@ -512,12 +562,72 @@ export function createEditor(options: {
       highlightActiveLine(),
       highlightActiveLineGutter(),
       EditorView.lineWrapping,
+      // 自动配对 `*`/`_`/`[`/`(` 等;配合 markdown 的续写命令
+      closeBrackets(),
       markdown({ base: markdownLanguage, addKeymap: false }),
       syntaxHighlighting(highlight),
-      livePreview(options.documentPath),
+      search({ top: true }),
+      livePreview(options.documentPath, options.getKnownTitles),
       theme,
+      // 图片:粘贴或拖入 → 交给外壳上传(见 NotesPane)
+      EditorView.domEventHandlers({
+        paste: (event) => {
+          const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith('image/'))
+          if (files.length === 0) return false
+          event.preventDefault()
+          for (const file of files) options.onImageFile?.(file)
+          return true
+        },
+        drop: (event) => {
+          const files = Array.from(event.dataTransfer?.files ?? []).filter((file) => file.type.startsWith('image/'))
+          if (files.length === 0) return false
+          event.preventDefault()
+          for (const file of files) options.onImageFile?.(file)
+          return true
+        },
+        mousedown: (event, view) => {
+          if (options.onWikiLink === undefined) return false
+          const position = view.posAtCoords({ x: event.clientX, y: event.clientY })
+          if (position === null) return false
+          const line = view.state.doc.lineAt(position)
+          const offset = position - line.from
+          const re = /\[\[([^\]\n|]{1,200})(\|[^\]\n]{0,200})?\]\]/g
+          let match: RegExpExecArray | null
+          while ((match = re.exec(line.text)) !== null) {
+            if (offset >= match.index && offset <= match.index + match[0].length) {
+              event.preventDefault()
+              options.onWikiLink(match[1].trim())
+              return true
+            }
+          }
+          return false
+        },
+      }),
       keymap.of([
+        // 保存 / 搜索
         { key: 'Mod-s', preventDefault: true, run: () => (options.onSave(), true) },
+        { key: 'Mod-f', preventDefault: true, run: openSearchPanel },
+        // markdown 续写:Enter 续列表/引用、空项退出;Backspace 删标记(官方实现)
+        { key: 'Enter', run: insertNewlineContinueMarkup },
+        { key: 'Shift-Enter', run: insertNewlineContinueMarkup },
+        { key: 'Backspace', run: deleteMarkupBackward },
+        // 行内/行首快捷键:对齐 Typora / Obsidian 的习惯
+        { key: 'Mod-b', preventDefault: true, run: (view) => (wrapSelection(view, '**'), true) },
+        { key: 'Mod-i', preventDefault: true, run: (view) => (wrapSelection(view, '*'), true) },
+        { key: 'Mod-e', preventDefault: true, run: (view) => (wrapSelection(view, '`'), true) },
+        { key: 'Mod-Shift-h', preventDefault: true, run: (view) => (wrapSelection(view, '=='), true) },
+        { key: 'Mod-1', preventDefault: true, run: (view) => (setHeading(view, 1), true) },
+        { key: 'Mod-2', preventDefault: true, run: (view) => (setHeading(view, 2), true) },
+        { key: 'Mod-3', preventDefault: true, run: (view) => (setHeading(view, 3), true) },
+        { key: 'Mod-4', preventDefault: true, run: (view) => (setHeading(view, 4), true) },
+        { key: 'Mod-5', preventDefault: true, run: (view) => (setHeading(view, 5), true) },
+        { key: 'Mod-6', preventDefault: true, run: (view) => (setHeading(view, 6), true) },
+        { key: 'Mod-0', preventDefault: true, run: (view) => (setHeading(view, 0), true) },
+        { key: 'Tab', preventDefault: true, run: indentMore },
+        { key: 'Shift-Tab', preventDefault: true, run: indentLess },
+        ...closeBracketsKeymap,
+        ...searchKeymap,
+        ...markdownKeymap,
         indentWithTab,
         ...defaultKeymap,
         ...historyKeymap,
@@ -550,6 +660,24 @@ export function createEditor(options: {
       view.focus()
     },
   }
+}
+
+/** 把选中行设成 N 级标题(`0` = 取消标题);与 Typora 的 Ctrl+1..6 / Ctrl+0 一致。 */
+export function setHeading(view: EditorView, level: number): void {
+  const { state } = view
+  const changes: Array<{ from: number; to: number; insert: string }> = []
+  for (const range of state.selection.ranges) {
+    const first = state.doc.lineAt(range.from).number
+    const last = state.doc.lineAt(range.to).number
+    for (let number = first; number <= last; number += 1) {
+      const line = state.doc.line(number)
+      const stripped = line.text.replace(/^\s*#{1,6}\s+/, '')
+      const prefix = level === 0 ? '' : `${'#'.repeat(Math.max(1, Math.min(6, level)))} `
+      changes.push({ from: line.from, to: line.to, insert: prefix + stripped })
+    }
+  }
+  view.dispatch({ changes })
+  view.focus()
 }
 
 /** 在选区两侧包一层标记(`**粗体**` 之类)。 */

@@ -13,7 +13,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import { parseOutline } from '../../lib/outline.js'
-import { RouteError, readNote, saveNote, type TreeNote } from './api'
+import { RouteError, readNote, saveNote, uploadAsset, type TreeNote } from './api'
 import {
   createEditor,
   insertImageSnippet,
@@ -49,6 +49,10 @@ export interface EditorPaneProps {
   onCursorLine?: (line: number) => void
   /** 请求跳转到某一行(`nonce` 变化即触发一次)。 */
   jumpTo?: { line: number; nonce: number } | null
+  /** 点 `[[双链]]`(外壳决定打开还是新建)。 */
+  onWikiLink?: (title: string) => void
+  /** 当前工作区已知标题(双链上色用)。 */
+  getKnownTitles?: () => Set<string>
 }
 
 /** 保存状态。 */
@@ -135,6 +139,26 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
             }, AUTOSAVE_MS)
           },
           onSelection: (line: number) => cursorRef.current?.(line),
+          // 粘贴/拖入的图片 → 上传到资产目录 → 在光标处插入 markdown 链接
+          onImageFile: (file: File) => {
+            void (async () => {
+              try {
+                const asset = await uploadAsset(sessionId, note.id, file.name, file)
+                const editor = editorRef.current
+                if (editor === null) return
+                const range = editor.view.state.selection.main
+                editor.view.dispatch({
+                  changes: { from: range.from, to: range.to, insert: asset.markdown },
+                  selection: { anchor: range.from + asset.markdown.length },
+                })
+                editor.focus()
+              } catch (caught) {
+                setError(caught instanceof Error ? caught.message : String(caught))
+              }
+            })()
+          },
+          onWikiLink: props.onWikiLink,
+          getKnownTitles: props.getKnownTitles,
           onSave: () => {
             if (timerRef.current !== null) window.clearTimeout(timerRef.current)
             void save()

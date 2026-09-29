@@ -10,7 +10,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
-import { call, fetchTree, type Tree, type TreeNote, type TreeRef, type TreeUnfiled } from './api'
+import { call, fetchTree, importNote, type Tree, type TreeNote, type TreeRef, type TreeUnfiled } from './api'
 import { EditorPane } from './EditorPane'
 import { OutlinePane, type OutlineItem } from './OutlinePane'
 import { TreePane } from './TreePane'
@@ -49,6 +49,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [selected, setSelected] = useState<TreeNote | null>(null)
   const [selectedRef, setSelectedRef] = useState<TreeRef | null>(null)
   const [compose, setCompose] = useState<ComposeMode | null>(null)
+  /** 新建时的目标分类(右键「在此新建」/ 工具栏 ＋ 用)。 */
+  const [composeParent, setComposeParent] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   /** 左列的两个标签页:文件树 / 大纲(Typora 的两个侧栏页)。 */
@@ -130,6 +132,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         return
       }
       setBusy(true)
+      // 新动作开始就清掉上一次的红字(否则失败信息会一直挂着,像还在报错)
+      setError(null)
       try {
         const value = await call(action, { sessionId, ...payload })
         done?.(value)
@@ -153,16 +157,16 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       return
     }
     if (compose === 'note') {
-      await run('create', { title: text, collectionId: selected?.collectionId ?? null }, (note) => {
+      await run('create', { title: text, collectionId: composeParent }, (note) => {
         setSelected(note)
         setStatus(t('status.created'))
       })
     } else {
-      await run('collection', { op: 'create', name: text, parentId: null }, () => setStatus(t('status.collectionCreated')))
+      await run('collection', { op: 'create', name: text, parentId: composeParent }, () => setStatus(t('status.collectionCreated')))
     }
     setCompose(null)
     setDraft('')
-  }, [compose, draft, run, selected, t])
+  }, [compose, composeParent, draft, run, t])
 
   const onPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -191,6 +195,115 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     },
     [run, t],
   )
+
+  /** 右键「在此新建笔记 / 新建子分类」。 */
+  const startCompose = useCallback((mode: ComposeMode, parentId: string | null) => {
+    setTreeOpen(true)
+    setPanelTab('files')
+    setComposeParent(parentId)
+    setCompose(mode)
+    setDraft('')
+  }, [])
+
+  /** 置顶 / 取消置顶。 */
+  const onPin = useCallback(
+    (note: TreeNote, pinned: boolean) => {
+      void run('pin', { noteId: note.id, pinned }, () => setStatus(pinned ? t('status.pinned') : t('status.unpinned')))
+    },
+    [run, t],
+  )
+
+  /** 移出笔记树(只删索引,永不删文件)。 */
+  const onUnregister = useCallback(
+    (note: TreeNote) => {
+      void run('unregister', { noteId: note.id }, () => setStatus(t('status.unregistered')))
+    },
+    [run, t],
+  )
+
+  /** 复制绝对路径。 */
+  const onCopyPath = useCallback(
+    (absolute: string, relative: string) => {
+      const clipboard = navigator.clipboard
+      if (clipboard === undefined) {
+        setStatus(t('status.copyFailed'))
+        return
+      }
+      void clipboard.writeText(absolute).then(
+        () => setStatus(t('status.pathCopied').replace('{p}', relative)),
+        () => setStatus(t('status.copyFailed')),
+      )
+    },
+    [t],
+  )
+
+  /**
+   * 「在文件树中定位」。
+   *
+   * 客户端没有"切换/定位官方文件页"的公开服务(见 AGENTS.md:客户端 Service 目录里
+   * 只有 layout 的面板/侧栏级动作),所以这里做能做的部分:复制相对路径 + 明确提示,
+   * 用户可以直接粘到「文件」页的搜索框。
+   */
+  const onReveal = useCallback(
+    (relative: string) => {
+      void navigator.clipboard?.writeText(relative)
+      setStatus(t('status.revealHint').replace('{p}', relative))
+    },
+    [t],
+  )
+
+  /** 外部文件拖进来:`.md` 逐个导入成笔记。 */
+  const onImportFiles = useCallback(
+    (files: File[]) => {
+      const markdown = files.filter((file) => /\.md$/i.test(file.name) || file.type === 'text/markdown')
+      if (markdown.length === 0) {
+        setStatus(t('status.importSkipped'))
+        return
+      }
+      void (async () => {
+        for (const file of markdown) {
+          try {
+            const text = await file.text()
+            await importNote(sessionId, file.name, text, composeParent)
+          } catch (caught) {
+            setError(caught instanceof Error ? caught.message : String(caught))
+            return
+          }
+        }
+        await refresh(true)
+        setStatus(t('status.imported').replace('{n}', String(markdown.length)))
+      })()
+    },
+    [composeParent, refresh, sessionId, t],
+  )
+
+  /** 从别处拖来的单个路径(文件树里的 .md)= 登记。 */
+  const onRegisterPath = useCallback(
+    (path: string) => {
+      void run('register', { path }, () => setStatus(t('status.registered')))
+    },
+    [run, t],
+  )
+
+  /** 点 `[[双链]]`:对得上就打开,对不上就按该标题新建。 */
+  const onWikiLink = useCallback(
+    (title: string) => {
+      const existing = tree?.notes.find((note) => note.title === title)
+      if (existing !== undefined) {
+        setSelected(existing)
+        setSelectedRef(null)
+        return
+      }
+      void run('create', { title, collectionId: selected?.collectionId ?? null }, (note) => {
+        setSelected(note)
+        setStatus(t('status.created'))
+      })
+    },
+    [run, selected, t, tree],
+  )
+
+  /** 双链能否对上(给编辑器上色用)。 */
+  const knownTitles = useCallback(() => new Set((tree?.notes ?? []).map((note) => note.title)), [tree])
 
   /** 拖放:把笔记放到某分类的指定位置(`index` 省略 = 末尾)。 */
   const onMoveNote = useCallback(
@@ -221,6 +334,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         disabled={busy}
         onClick={() => {
           setCompose((current) => (current === 'note' ? null : 'note'))
+          // 新建的默认落点:跟着当前选中笔记走(同级),没选中就放顶层
+          setComposeParent(selected?.collectionId ?? null)
           setDraft('')
         }}
       >
@@ -234,6 +349,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         disabled={busy}
         onClick={() => {
           setCompose((current) => (current === 'collection' ? null : 'collection'))
+          setComposeParent(null)
           setDraft('')
         }}
       >
@@ -354,6 +470,15 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     onFileAction={onFileAction}
                     onMoveNote={onMoveNote}
                     onMoveCollection={onMoveCollection}
+                    onPin={onPin}
+                    onUnregister={onUnregister}
+                    onCopyPath={onCopyPath}
+                    onReveal={onReveal}
+                    onNewNote={(collectionId) => startCompose('note', collectionId)}
+                    onNewCollection={(parentId) => startCompose('collection', parentId)}
+                    onImportFiles={onImportFiles}
+                    onRegisterPath={onRegisterPath}
+                    onDismissError={() => setError(null)}
                   />
                 ) : (
                   <OutlinePane
@@ -386,6 +511,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               onClick={() => {
                 setTreeOpen(true)
                 setCompose('note')
+                setComposeParent(selected?.collectionId ?? null)
                 setDraft('')
               }}
             >
@@ -399,6 +525,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               onClick={() => {
                 setTreeOpen(true)
                 setCompose('collection')
+                setComposeParent(null)
                 setDraft('')
               }}
             >
@@ -443,6 +570,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               note={selected}
               onOutline={setOutline}
               onCursorLine={setCursorLine}
+              onWikiLink={onWikiLink}
+              getKnownTitles={knownTitles}
               jumpTo={jump}
             />
           ) : (
