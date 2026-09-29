@@ -25,7 +25,7 @@
 ```bash
 # 1) 构建客户端产物
 cd "/mnt/d/project/deepseek worksapce/harness develop/dsh-notes"
-npm install && npm run build
+npm run setup && npm run build     # 首次需要 node_modules 符号链接,见 AGENTS.md
 
 # 2) 装进当前 profile(用 plugin_manager 工具,不要手写 profile)
 #    action: install_bundle, target: <本目录绝对路径>

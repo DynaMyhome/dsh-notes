@@ -1,0 +1,8 @@
+{
+  "name": "dsh-notes-build",
+  "private": true,
+  "description": "dsh-notes 的构建工具链(只有 esbuild)。与插件运行期的 node_modules 分开:后者是指向 profile 的符号链接,只为解析 @deepseek-ai/*。",
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
