@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { call, fetchTree, importNote, type Tree, type TreeNote, type TreeRef, type TreeUnfiled } from './api'
 import { EditorPane } from './EditorPane'
 import { OutlinePane, type OutlineItem } from './OutlinePane'
+import { QuickOpen } from './QuickOpen'
 import { TreePane } from './TreePane'
 
 /** 笔记树的宽度范围(px)。 */
@@ -61,6 +62,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [cursorLine, setCursorLine] = useState<number | null>(null)
   /** 大纲跳转请求(nonce 变化触发一次)。 */
   const [jump, setJump] = useState<{ line: number; nonce: number }>({ line: 1, nonce: 0 })
+  /** 快速打开(Ctrl/Cmd+P、Ctrl/Cmd+K;仅当焦点在笔记区域内)。 */
+  const [quickOpen, setQuickOpen] = useState(false)
   const drag = useRef<{ startX: number; startWidth: number } | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -403,7 +406,27 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     )
 
   return (
-    <div className="dsh-notes-root">
+    <div
+      className="dsh-notes-root"
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        // 只在焦点位于笔记区域内时接管:不劫持整个应用的 Ctrl+P(浏览器打印)
+        if ((event.ctrlKey || event.metaKey) && (event.key === 'p' || event.key === 'k')) {
+          event.preventDefault()
+          setQuickOpen(true)
+        }
+      }}
+    >
+      {quickOpen ? (
+        <QuickOpen
+          notes={tree?.notes ?? []}
+          onPick={(note) => {
+            setSelected(note)
+            setSelectedRef(null)
+          }}
+          onClose={() => setQuickOpen(false)}
+        />
+      ) : null}
       <div className="dsh-notes-header">
         <span className="dsh-notes-title">{t('tab.title')}</span>
         <span className="dsh-notes-sub">
