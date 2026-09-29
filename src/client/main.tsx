@@ -75,6 +75,10 @@ const ZH: Record<string, string> = {
   'tree.before': '插到',
   'tree.after': '插到',
   'tree.topLevel': '放到顶层',
+  'panel.files': '文件',
+  'panel.outline': '大纲',
+  'outline.empty': '这篇笔记还没有标题。写一行 `# 标题` 就会出现在这里。',
+  'outline.jump': '跳到第 {n} 行',
 }
 
 const EN: Record<string, string> = {
@@ -107,6 +111,29 @@ const EN: Record<string, string> = {
   'editor.pending': 'The editor arrives in P2 (CodeMirror 6); for now this shows the selected note path.',
   'editor.noSelection': 'Pick a note on the left.',
   'editor.refFrom': 'From another workspace: {name} (a mapping, not a copy)',
+  'editor.loading': 'Loading…',
+  'editor.saving': 'Saving…',
+  'editor.dirty': 'Unsaved',
+  'editor.saved': 'Saved',
+  'editor.saveFailed': 'Save failed',
+  'editor.loadFailed': 'Could not open this note.',
+  'editor.conflict': 'The file changed outside this editor (agent / Obsidian / another window)',
+  'editor.reload': 'Reload',
+  'editor.overwrite': 'Overwrite with mine',
+  'editor.chars': '{n} chars',
+  'editor.bold': 'Bold',
+  'editor.italic': 'Italic',
+  'editor.highlight': 'Highlight ==…==',
+  'editor.heading': 'Heading 2',
+  'editor.list': 'List',
+  'editor.quote': 'Quote',
+  'editor.code': 'Inline code',
+  'editor.image': 'Insert image',
+  'editor.saveNow': 'Save now (Ctrl/Cmd+S)',
+  'panel.files': 'Files',
+  'panel.outline': 'Outline',
+  'outline.empty': 'No headings in this note yet. Write a `# heading` line to see it here.',
+  'outline.jump': 'Jump to line {n}',
 }
 
 /**

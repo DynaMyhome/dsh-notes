@@ -53,6 +53,22 @@ export const CSS = [
   '@keyframes dsh-notes-status-fade{0%,70%{opacity:1}100%{opacity:0}}',
   '.dsh-notes-error{padding:4px 10px;font-size:11px;line-height:1.6;color:var(--dsw-alias-state-error-primary);white-space:pre-wrap}',
 
+  /* 左列标签页(文件 / 大纲)+ 大纲 */
+  '.dsh-notes-column{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;min-width:0}',
+  '.dsh-notes-panel-tabs{display:flex;align-items:center;gap:2px;flex:0 0 auto;padding:4px 6px;border-bottom:1px solid var(--dsw-alias-border-l1)}',
+  '.dsh-notes-panel-tab{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:1.6;padding:2px 9px;border-radius:5px;cursor:pointer}',
+  '.dsh-notes-panel-tab:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}',
+  '.dsh-notes-panel-tab-on{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:600}',
+  '.dsh-notes-outline{flex:1 1 auto;min-height:0;overflow:auto;padding:4px 0}',
+  '.dsh-notes-outline-row{display:flex;align-items:center;gap:6px;height:24px;padding-right:8px;font-size:12.5px;color:var(--dsw-alias-label-secondary);cursor:pointer;white-space:nowrap;user-select:none}',
+  '.dsh-notes-outline-row:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}',
+  '.dsh-notes-outline-active{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);box-shadow:inset 2px 0 0 var(--dsw-alias-brand-primary)}',
+  '.dsh-notes-outline-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}',
+  '.dsh-notes-outline-h{flex:0 0 auto;font-size:9.5px;letter-spacing:.02em;color:var(--dsw-alias-label-secondary);opacity:.7}',
+  '.dsh-notes-outline-h1{color:var(--dsw-alias-brand-primary);opacity:1}',
+  '.dsh-notes-outline-h2{opacity:.92}',
+  '.dsh-notes-outline-h3{opacity:.8}',
+
   /* 分隔条 / 收起条 */
   '.dsh-notes-resizer{flex:0 0 auto;width:4px;cursor:col-resize;background:transparent}',
   '.dsh-notes-resizer:hover{background:var(--dsw-alias-border-l2)}',
