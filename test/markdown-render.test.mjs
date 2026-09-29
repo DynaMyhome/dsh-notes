@@ -26,7 +26,20 @@ const decide = (text, selection, knownTitles = new Set()) =>
     text,
     selection: selection ?? [{ from: text.length, to: text.length }],
     knownTitles,
+    // 这些用例测的是"还原"行为,显式打开 reveal;预览模式的默认行为见下面单独一条
+    reveal: true,
   })
+
+test('预览模式(默认 reveal: false):光标在构造里也**不还原**源码(Typora 手感)', () => {
+  const text = '> 引用\n\n**粗**\n'
+  const descs = decideDecorations({
+    tree: parse(text),
+    text,
+    selection: [{ from: 3, to: 3 }],
+  })
+  const hidden = descs.filter((item) => item.kind === 'hide').map((item) => text.slice(item.from, item.to))
+  assert.deepEqual(hidden.sort(), ['**', '**', '>'])
+})
 
 /** 取某类描述。 */
 const only = (descs, kind) => descs.filter((item) => item.kind === kind)

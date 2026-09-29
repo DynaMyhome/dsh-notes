@@ -22,6 +22,7 @@ import {
   type EditorHandle,
 } from './editor/setup'
 import type { OutlineItem } from './OutlinePane'
+import { setSourceMode as applySourceMode } from './editor/mode'
 import {
   IconBold,
   IconCheck,
@@ -81,6 +82,8 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   const [conflict, setConflict] = useState<{ version: string; text: string | null } | null>(null)
   const [docPath, setDocPath] = useState<string | null>(null)
   const [length, setLength] = useState(0)
+  /** 源码模式(Typora 式:默认预览,标记全隐藏;要看/改源码时切过来)。 */
+  const [sourceMode, setSourceMode] = useState(false)
 
   /** 保存(守卫式)。 */
   const save = useCallback(async (): Promise<void> => {
@@ -125,6 +128,8 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
         const host = hostRef.current
         if (host === null) return
         editorRef.current?.destroy()
+        // 切模式靠重建编辑器:装饰插件与块级 StateField 都读这个标志
+        applySourceMode(sourceMode)
         editorRef.current = createEditor({
           parent: host,
           doc: loaded.text,
@@ -182,7 +187,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       editorRef.current = null
       outlineRef.current?.([])
     }
-  }, [note.path, save, sessionId])
+  }, [note.path, save, sessionId, sourceMode])
 
   /** 大纲点击 → 跳到该标题行。 */
   useEffect(() => {
@@ -267,6 +272,16 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
           </button>
           <button type="button" className="dsh-notes-btn" title={t('editor.image')} aria-label={t('editor.image')} onClick={() => apply((e) => insertImageSnippet(e.view))}>
             <IconImage />
+          </button>
+          <button
+            type="button"
+            className="dsh-notes-btn"
+            title={sourceMode ? t('editor.previewMode') : t('editor.sourceMode')}
+            aria-label={sourceMode ? t('editor.previewMode') : t('editor.sourceMode')}
+            aria-pressed={sourceMode}
+            onClick={() => setSourceMode((current) => !current)}
+          >
+            {sourceMode ? t('editor.modeSourceShort') : t('editor.modePreviewShort')}
           </button>
           <button type="button" className="dsh-notes-btn" title={t('editor.saveNow')} aria-label={t('editor.saveNow')} onClick={() => void save()}>
             <IconCheck />
