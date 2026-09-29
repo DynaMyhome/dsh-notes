@@ -43,6 +43,8 @@ const ZH: Record<string, string> = {
   'compose.note': '笔记标题,回车创建',
   'compose.collection': '分类名,回车创建',
   'compose.ok': '建',
+  'status.untitled': '未命名',
+  'status.newCollection': '新分类',
   'status.created': '已新建并登记',
   'status.collectionCreated': '已新建分类',
   'status.registered': '已纳入笔记树',
