@@ -70,7 +70,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
    * 创建即改名(Obsidian 手感):先建成默认名,再让那一行进入行内改名。
    * 取消改名不删文件,保持默认名(与 Obsidian 一致)。
    */
-  const startCreate = useCallback(
+  const startCreate = (
     (kind: 'note' | 'collection'): void => {
       if (kind === 'note') {
         run('create', { title: t('status.untitled'), collectionId: selected?.collectionId ?? null }, (note?: { id?: string }) => {
@@ -86,22 +86,19 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         if (typeof created?.id === 'string') setRenamingKey(`c:${created.id}`)
       })
     },
-    [run, selected, t],
   )
   /** 行内改名的提交与取消。 */
-  const commitNoteRename = useCallback(
+  const commitNoteRename = (
     (note: TreeNote, title: string): void => {
       setRenamingKey(null)
       void run('rename', { noteId: note.id, title })
     },
-    [run],
   )
-  const commitCollectionRename = useCallback(
+  const commitCollectionRename = (
     (id: string, name: string): void => {
       setRenamingKey(null)
       void run('collection', { op: 'rename', collectionId: id, name })
     },
-    [run],
   )
   /** 大纲拖拽重排章节的请求(nonce 变化触发一次)。 */
   const [outlineMove, setOutlineMove] = useState<{
