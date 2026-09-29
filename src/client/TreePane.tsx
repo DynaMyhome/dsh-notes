@@ -22,6 +22,10 @@ export interface TreePaneProps {
   onSelectRef: (ref: TreeRef) => void
   /** 点一个未归类文件(P3 起支持一键纳入)。 */
   onFileAction: (file: TreeUnfiled) => void
+  /** 动作区:新建笔记 / 新建分类 / 重扫 / 收起 —— 由外壳注入,视觉上属于这一列。 */
+  toolbar?: React.ReactNode
+  /** 头行与树体之间的一行(例如新建输入条)。 */
+  header?: React.ReactNode
 }
 
 interface Row {
@@ -145,7 +149,9 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
         </span>
         <span className="dsh-notes-spacer" />
         {loading ? <span className="dsh-notes-dim">…</span> : null}
+        {props.toolbar !== undefined ? <span className="dsh-notes-toolbar">{props.toolbar}</span> : null}
       </div>
+      {props.header}
       {error !== null ? <div className="dsh-notes-error">{error}</div> : null}
       <div className="dsh-notes-tree-body">
         {rows.length === 0 && !loading ? (

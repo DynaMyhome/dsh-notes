@@ -43,8 +43,9 @@ export const CSS = [
   /* 分隔条 / 收起条 */
   '.dsh-notes-resizer{flex:0 0 auto;width:4px;cursor:col-resize;background:transparent}',
   '.dsh-notes-resizer:hover{background:var(--dsw-alias-border-l2)}',
-  '.dsh-notes-rail{flex:0 0 auto;width:18px;appearance:none;border:0;border-right:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-sidebar-fill);color:var(--dsw-alias-label-secondary);cursor:pointer;padding:0;font:inherit}',
-  '.dsh-notes-rail:hover{color:var(--dsw-alias-label-primary)}',
+  '.dsh-notes-rail{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:2px;width:20px;padding:2px 0;border-right:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-sidebar-fill)}',
+  '.dsh-notes-rail .dsh-notes-btn{padding:0 2px;font-size:11px;line-height:1.5}',
+  '.dsh-notes-toolbar{display:flex;align-items:center;gap:2px;flex:0 0 auto}',
 
   /* 编辑区 */
   '.dsh-notes-editor{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;overflow:auto}',
