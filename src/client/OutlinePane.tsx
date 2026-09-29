@@ -65,7 +65,6 @@ export function OutlinePane({ t, items, activeLine, onJump, onMove }: OutlinePan
   return (
     <div className="dsh-notes-outline" role="tree">
       {items.map((item, index) => {
-        const canDrop = onMove !== undefined && draggingLine !== null && draggingLine !== item.line
         const active = drop?.line === item.line
         return (
           <div
@@ -89,7 +88,9 @@ export function OutlinePane({ t, items, activeLine, onJump, onMove }: OutlinePan
             }}
             onDragEnd={finish}
             onDragOver={(event) => {
-              if (!canDrop) return
+              // 注意:`draggingLine` 是模块级变量,赋值**不会触发重渲染**,
+              // 所以必须在 handler 里实时读它 —— 渲染期算出来的常量会一直是旧值(踩过)。
+              if (onMove === undefined || draggingLine === null || draggingLine === item.line) return
               event.preventDefault()
               event.dataTransfer.dropEffect = 'move'
               const rect = event.currentTarget.getBoundingClientRect()
@@ -98,13 +99,13 @@ export function OutlinePane({ t, items, activeLine, onJump, onMove }: OutlinePan
             }}
             onDragLeave={() => setDrop((current) => (current?.line === item.line ? null : current))}
             onDrop={(event) => {
-              if (!canDrop || drop === null || onMove === undefined) return
+              if (onMove === undefined || draggingLine === null || draggingLine === item.line || drop === null) return
               event.preventDefault()
               const from = draggingLine
               const target = drop.line
               const mode = drop.mode
               finish()
-              if (from !== null) onMove(from, target, mode)
+              onMove(from, target, mode)
             }}
             onClick={() => onJump(item.line)}
           >
