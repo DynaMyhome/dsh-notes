@@ -64,6 +64,45 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [jump, setJump] = useState<{ line: number; nonce: number }>({ line: 1, nonce: 0 })
   /** 快速打开(Ctrl/Cmd+P、Ctrl/Cmd+K;仅当焦点在笔记区域内)。 */
   const [quickOpen, setQuickOpen] = useState(false)
+  /** 正在行内改名的行 key(`n:<id>` / `c:<id>`)。 */
+  const [renamingKey, setRenamingKey] = useState<string | null>(null)
+  /**
+   * 创建即改名(Obsidian 手感):先建成默认名,再让那一行进入行内改名。
+   * 取消改名不删文件,保持默认名(与 Obsidian 一致)。
+   */
+  const startCreate = useCallback(
+    (kind: 'note' | 'collection'): void => {
+      if (kind === 'note') {
+        run('create', { title: t('status.untitled'), collectionId: selected?.collectionId ?? null }, (note?: { id?: string }) => {
+          if (typeof note?.id === 'string') {
+            setSelected(note as never)
+            setSelectedRef(null)
+            setRenamingKey(`n:${note.id}`)
+          }
+        })
+        return
+      }
+      run('collection', { op: 'create', name: t('status.newCollection'), parentId: null }, (created?: { id?: string }) => {
+        if (typeof created?.id === 'string') setRenamingKey(`c:${created.id}`)
+      })
+    },
+    [run, selected, t],
+  )
+  /** 行内改名的提交与取消。 */
+  const commitNoteRename = useCallback(
+    (note: TreeNote, title: string): void => {
+      setRenamingKey(null)
+      void run('rename', { noteId: note.id, title })
+    },
+    [run],
+  )
+  const commitCollectionRename = useCallback(
+    (id: string, name: string): void => {
+      setRenamingKey(null)
+      void run('collection', { op: 'rename', collectionId: id, name })
+    },
+    [run],
+  )
   /** 大纲拖拽重排章节的请求(nonce 变化触发一次)。 */
   const [outlineMove, setOutlineMove] = useState<{
     fromLine: number
@@ -343,7 +382,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         aria-label={t('action.newNote')}
         disabled={busy}
         onClick={() => {
-          setCompose((current) => (current === 'note' ? null : 'note'))
+          startCreate('note')
           // 新建的默认落点:跟着当前选中笔记走(同级),没选中就放顶层
           setComposeParent(selected?.collectionId ?? null)
           setDraft('')
@@ -358,7 +397,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         aria-label={t('action.newCollection')}
         disabled={busy}
         onClick={() => {
-          setCompose((current) => (current === 'collection' ? null : 'collection'))
+          startCreate('collection')
           setComposeParent(null)
           setDraft('')
         }}
@@ -490,6 +529,10 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     toolbar={toolbar}
                     composer={composeRow}
                     composerParent={composeParent}
+                    renamingKey={renamingKey}
+                    onRenameNote={commitNoteRename}
+                    onRenameCollection={commitCollectionRename}
+                    onCancelRename={() => setRenamingKey(null)}
                     onSelectNote={(note) => {
                       setSelected(note)
                       setSelectedRef(null)

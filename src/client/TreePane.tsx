@@ -53,6 +53,8 @@ export interface TreePaneProps {
   onRenameNote?: (note: TreeNote, title: string) => void
   /** 提交分类改名。 */
   onRenameCollection?: (id: string, name: string) => void
+  /** 取消行内改名。 */
+  onCancelRename?: () => void
   toolbar?: React.ReactNode
   header?: React.ReactNode
   /** 就地新建输入条:渲染成树里的**一行**(在目标层级末尾),而不是顶栏压下来。 */
