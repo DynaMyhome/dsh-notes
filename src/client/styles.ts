@@ -55,7 +55,15 @@ export const CSS = [
   '.dsh-notes-input:focus{outline:none;border-color:var(--dsw-alias-brand-primary)}',
   '.dsh-notes-status{padding:3px 10px;font-size:11px;color:var(--dsw-alias-state-success-primary);border-bottom:1px solid var(--dsw-alias-border-l1);animation:dsh-notes-status-fade 2.4s forwards}',
   '@keyframes dsh-notes-status-fade{0%,70%{opacity:1}100%{opacity:0}}',
-  '.dsh-notes-error{padding:4px 10px;font-size:11px;line-height:1.6;color:var(--dsw-alias-state-error-primary);white-space:pre-wrap}',
+  '.dsh-notes-error{display:flex;align-items:flex-start;gap:6px;padding:4px 6px 4px 10px;font-size:11px;line-height:1.6;color:var(--dsw-alias-state-error-primary);white-space:pre-wrap}',
+  '.dsh-notes-error-text{flex:1 1 auto;min-width:0}',
+  '.dsh-notes-error-close{flex:0 0 auto;appearance:none;border:none;background:transparent;color:inherit;font:inherit;font-size:13px;line-height:1;padding:0 4px;cursor:pointer;opacity:.7}',
+  '.dsh-notes-error-close:hover{opacity:1}',
+  /* 右键菜单 */
+  '.dsh-notes-menu{position:fixed;z-index:60;min-width:172px;padding:4px;border-radius:8px;background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l2);box-shadow:0 10px 28px rgba(0,0,0,.22);display:flex;flex-direction:column;gap:1px}',
+  '.dsh-notes-menu-item{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:1.6;text-align:left;padding:4px 9px;border-radius:5px;cursor:pointer;white-space:nowrap}',
+  '.dsh-notes-menu-item:hover{background:var(--dsw-alias-bg-layer-2)}',
+  '.dsh-notes-menu-sep{height:1px;margin:3px 4px;background:var(--dsw-alias-border-l1)}',
 
   /* 左列标签页(文件 / 大纲)+ 大纲 */
   '.dsh-notes-column{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;min-width:0}',

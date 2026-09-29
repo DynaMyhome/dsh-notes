@@ -15,7 +15,7 @@
  * 数据与写操作在 {@link NotesPane};这里只算"落在哪"。
  */
 
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Tree, TreeNote, TreeRef, TreeUnfiled } from './api'
 import { IconChevron, IconCollection, IconInbox, IconNote } from './icons'
@@ -34,6 +34,19 @@ export interface TreePaneProps {
   onMoveNote: (noteId: string, collectionId: string | null, index: number | null) => void
   /** 把分类放到某父分类下的指定位置(`index` 省略 = 末尾)。 */
   onMoveCollection: (collectionId: string, parentId: string | null, index: number | null) => void
+  /** 右键菜单动作。 */
+  onPin: (note: TreeNote, pinned: boolean) => void
+  onUnregister: (note: TreeNote) => void
+  onCopyPath: (path: string, relative: string) => void
+  onReveal: (path: string) => void
+  /** 在某个分类里新建笔记 / 子分类(`null` = 顶层)。 */
+  onNewNote: (collectionId: string | null) => void
+  onNewCollection: (parentId: string | null) => void
+  /** 外部文件拖进来:内容导入 / 已知路径登记。 */
+  onImportFiles: (files: File[]) => void
+  onRegisterPath: (path: string) => void
+  /** 关掉错误提示。 */
+  onDismissError: () => void
   toolbar?: React.ReactNode
   header?: React.ReactNode
 }
@@ -94,6 +107,8 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
   const { t, tree, loading, error, selectedId } = props
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [drop, setDrop] = useState<DropState | null>(null)
+  /** 右键菜单(位置 + 属于哪一行)。 */
+  const [menu, setMenu] = useState<{ x: number; y: number; row: Row } | null>(null)
   const expandTimer = useRef<number | null>(null)
 
   const rows = useMemo<Row[]>(() => {
@@ -238,6 +253,21 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
     setDrop(null)
   }
 
+  // 右键菜单:点别处 / Esc 关闭
+  useEffect(() => {
+    if (menu === null) return undefined
+    const close = (): void => setMenu(null)
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setMenu(null)
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menu])
+
   /** 落下:按落点算出 (父, 位置) 再交给外壳。 */
   const applyDrop = (): void => {
     const payload = dragging
@@ -259,6 +289,59 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
     }
     return false
   }
+
+  /** 同一父、同一类(分类/笔记各自成序)的可见兄弟。 */
+  const siblingsOf = (row: Row): Row[] =>
+    rows.filter(
+      (item) => item.kind === row.kind && (item.parentId ?? null) === (row.parentId ?? null) && item.drag !== undefined,
+    )
+
+  /**
+   * 键盘整理:`Alt+↑/↓` 同级排序、`Alt+←` 升级(移到父级之后)、`Alt+→` 降级(成为上一个兄弟的子项)。
+   *
+   * 位置语义与拖放一致:「插到当前画面里第 N 项之前」;`null` = 追加到末尾。
+   */
+  const moveByKey = (row: Row, direction: 'up' | 'down' | 'out' | 'in'): void => {
+    if (row.drag === undefined) return
+    const noteId = row.drag.kind === 'note' ? row.drag.id : null
+    const collectionId = row.drag.kind === 'collection' ? row.drag.id : null
+    const apply = (parentId: string | null, index: number | null): void => {
+      if (noteId !== null) props.onMoveNote(noteId, parentId, index)
+      else if (collectionId !== null) props.onMoveCollection(collectionId, parentId, index)
+    }
+    const siblings = siblingsOf(row)
+    const position = siblings.findIndex((item) => item.key === row.key)
+
+    if (direction === 'up') {
+      if (position <= 0) return
+      apply(row.parentId ?? null, position - 1)
+      return
+    }
+    if (direction === 'down') {
+      if (position < 0 || position >= siblings.length - 1) return
+      // "插到当前画面第 N 项之前":往下挪一格 = 插到"再下一项"之前
+      const anchor = siblings[position + 2]
+      apply(row.parentId ?? null, anchor === undefined ? null : position + 2)
+      return
+    }
+    if (direction === 'in') {
+      // 降级:成为上一个兄弟(必须是分类)
+      const previous = position > 0 ? siblings[position - 1] : undefined
+      if (previous === undefined || previous.dropAs === undefined || previous.dropAs === null) return
+      apply(previous.dropAs, null)
+      return
+    }
+    // 升级:挂到父分类的父级,并排到父后面(order 是 1 基,等于"父的 0 基下标 + 1")
+    const parentId = row.parentId ?? null
+    if (parentId === null) return
+    const parent = tree?.collections.find((node) => node.id === parentId)
+    if (parent === undefined) return
+    const grandParentId = parent.parentId ?? null
+    apply(grandParentId, Number.isFinite(parent.order) ? (parent.order as number) : null)
+  }
+
+  /** 右键菜单里的行(把 row 转成菜单需要的信息)。 */
+  const menuNote = (row: Row): TreeNote | null => (row.kind === 'note' ? (row.target as TreeNote) ?? null : null)
 
   /** 计算某一行的落点。 */
   const zoneOf = (row: Row, event: React.DragEvent<HTMLElement>): DropState | null => {
@@ -318,7 +401,14 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
         {props.toolbar !== undefined ? <span className="dsh-notes-toolbar">{props.toolbar}</span> : null}
       </div>
       {props.header}
-      {error !== null ? <div className="dsh-notes-error">{error}</div> : null}
+      {error !== null ? (
+        <div className="dsh-notes-error">
+          <span className="dsh-notes-error-text">{error}</span>
+          <button type="button" className="dsh-notes-error-close" title={t('status.dismiss')} onClick={props.onDismissError}>
+            ×
+          </button>
+        </div>
+      ) : null}
       <div
         className={[
           'dsh-notes-tree-body',
@@ -347,8 +437,34 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
         }}
         onDrop={(event) => {
           event.preventDefault()
+          // 外部拖入:系统里的 .md(有 File 对象)或别处拖来的路径
+          const files = Array.from(event.dataTransfer?.files ?? [])
+          if (dragging === null) {
+            const text = event.dataTransfer?.getData('text/plain') ?? ''
+            const uri = event.dataTransfer?.getData('text/uri-list') ?? ''
+            const candidate = (uri !== '' ? uri : text).replace(/^file:\/\//, '').trim()
+            if (files.length > 0) {
+              props.onImportFiles(files)
+              return
+            }
+            if (/\.md$/i.test(candidate)) {
+              props.onRegisterPath(decodeURI(candidate))
+              return
+            }
+            return
+          }
           if (drop?.key === '__root') applyDrop()
           else endDrag()
+        }}
+        onContextMenu={(event) => {
+          // 空白处右键 = 顶层的新建菜单
+          if ((event.target as HTMLElement).closest?.('.dsh-notes-row') != null) return
+          event.preventDefault()
+          setMenu({
+            x: event.clientX,
+            y: event.clientY,
+            row: { key: '__blank', kind: 'collection', depth: 0, label: '', dropAs: null, parentId: null },
+          })
         }}
       >
         {rows.length === 0 && !loading ? (
@@ -374,7 +490,26 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                 role="treeitem"
                 aria-selected={row.selected === true}
                 title={row.hint}
+                tabIndex={0}
                 draggable={row.drag !== undefined}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setMenu({ x: event.clientX, y: event.clientY, row })
+                }}
+                onKeyDown={(event) => {
+                  if (!event.altKey) return
+                  const map: Record<string, 'up' | 'down' | 'out' | 'in'> = {
+                    ArrowUp: 'up',
+                    ArrowDown: 'down',
+                    ArrowLeft: 'out',
+                    ArrowRight: 'in',
+                  }
+                  const direction = map[event.key]
+                  if (direction === undefined) return
+                  event.preventDefault()
+                  moveByKey(row, direction)
+                }}
                 onDragStart={(event) => {
                   if (row.drag === undefined) return
                   dragging = row.drag
@@ -452,6 +587,59 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
       {dragging !== null && drop !== null ? (
         <div className="dsh-notes-drop-chip" style={{ left: drop.x + 14, top: drop.y + 14 }}>
           {drop.label}
+        </div>
+      ) : null}
+
+      {menu !== null ? (
+        <div
+          className="dsh-notes-menu"
+          style={{ left: menu.x, top: menu.y }}
+          role="menu"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          {(() => {
+            const note = menuNote(menu.row)
+            const item = (label: string, action: () => void): React.ReactElement => (
+              <button
+                key={label}
+                type="button"
+                role="menuitem"
+                className="dsh-notes-menu-item"
+                onClick={() => {
+                  setMenu(null)
+                  action()
+                }}
+              >
+                {label}
+              </button>
+            )
+            if (note !== null) {
+              return (
+                <>
+                  {item(note.pinned ? t('menu.unpin') : t('menu.pin'), () => props.onPin(note, !note.pinned))}
+                  {item(t('menu.copyPath'), () => props.onCopyPath(note.path, note.relPath))}
+                  {item(t('menu.reveal'), () => props.onReveal(note.relPath))}
+                  {item(t('menu.newNoteHere'), () => props.onNewNote(menu.row.parentId ?? null))}
+                  <div className="dsh-notes-menu-sep" />
+                  {item(t('menu.unregister'), () => props.onUnregister(note))}
+                </>
+              )
+            }
+            if (menu.row.key === '__blank') {
+              return (
+                <>
+                  {item(t('menu.newNote'), () => props.onNewNote(null))}
+                  {item(t('menu.newCollection'), () => props.onNewCollection(null))}
+                </>
+              )
+            }
+            return (
+              <>
+                {item(t('menu.newNoteHere'), () => props.onNewNote(menu.row.dropAs ?? null))}
+                {item(t('menu.newSubCollection'), () => props.onNewCollection(menu.row.dropAs ?? null))}
+              </>
+            )
+          })()}
         </div>
       ) : null}
 
