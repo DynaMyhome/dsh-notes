@@ -53,6 +53,7 @@ import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { tags as tag } from '@lezer/highlight'
 
 import { moveSection as moveSectionText } from '../../../lib/section.js'
+import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
 
 /** 行内隐藏/标记装饰。 */
 const markStrong = Decoration.mark({ class: 'dsh-cm-strong' })
@@ -765,7 +766,7 @@ export function createEditor(options: {
         ],
         activateOnTyping: true,
       }),
-      markdown({ base: markdownLanguage, addKeymap: false }),
+      markdown({ base: markdownLanguage, addKeymap: false, extensions: [markdownSyntaxConfig()] }),
       syntaxHighlighting(highlight),
       search({ top: true }),
       livePreview(options.documentPath, options.getKnownTitles),
