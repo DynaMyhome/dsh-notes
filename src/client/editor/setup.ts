@@ -88,8 +88,16 @@ const INLINE_MARKS: Record<string, Decoration> = {
   Strikethrough: markStrike,
 }
 
-/** 隐藏标记的子节点名。 */
-const MARKER_NODES = new Set(['EmphasisMark', 'CodeMark', 'StrikethroughMark', 'HeaderMark', 'QuoteMark', 'ListMark'])
+/** 隐藏标记的子节点名(非活动行隐藏;`ListMark` 例外,保留列表符号)。 */
+const MARKER_NODES = new Set([
+  'EmphasisMark',
+  'CodeMark',
+  'StrikethroughMark',
+  'HeaderMark',
+  'QuoteMark',
+  'LinkMark',
+  'ListMark',
+])
 
 /** 标题节点名 → 行装饰键。 */
 const HEADING_LINES: Record<string, string> = {
@@ -242,6 +250,18 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
         const line = state.doc.lineAt(node.from)
         const onActiveLine = keepSource.has(line.number)
 
+        // 标记符号:非活动行隐藏(Typora 的核心手感)。
+        //
+        // 关键事实:本环境里 **`SyntaxNode.children` 恒为 null**(实测:Document 也是 null);
+        // lezer 只通过 `firstChild`/`nextSibling` 暴露子节点。所以"遍历 children 找标记"
+        // 的写法永远找不到东西 —— 这也是「装饰都在、只有 `**`/`#`/`` ` `` 不消失」的原因。
+        // 正确做法:按节点名在 enter 里逐个处理(标记节点会作为独立节点被访问)。
+        // `ListMark`(`- `)保留:列表符号本身是有用信息。
+        if (!onActiveLine && MARKER_NODES.has(name)) {
+          if (name !== 'ListMark') add(node.from, node.to, hide)
+          return
+        }
+
         // 行级:标题 / 引用 / 分隔线
         const lineKey = HEADING_LINES[name]
         if (lineKey !== undefined) {
@@ -262,37 +282,20 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
         if (mark !== undefined) {
           add(node.from, node.to, mark)
           if (name === 'InlineCode') codeRanges.push({ from: node.from, to: node.to })
-          // 标记符号:非活动行隐藏
-          if (!onActiveLine) {
-            // 注意:`SyntaxNode.children` 对无子节点的节点返回 **null**(不是空数组),
-            // 直接 for..of 会抛 "children is not iterable",而 CM6 会把这当成
-            // 「CodeMirror plugin crashed」并**丢掉整个装饰层**(实测就是这样)。
-            for (const child of node.node.children ?? []) {
-              if (MARKER_NODES.has(child.name)) add(child.from, child.to, hide)
-            }
-          }
           return
         }
 
-        // 标题的 `#`:非活动行隐藏
-        if (HEADING_LINES[name] !== undefined && !onActiveLine) {
-          for (const child of node.node.children ?? []) {
-            if (child.name === 'HeaderMark') add(child.from, child.to, hide)
-          }
-          return
-        }
-
-        // 链接:隐藏 URL 部分(保留文字)
+        // 链接:文字着色;链接里的 URL 在非活动行隐藏(见下面 URL 分支)
         if (name === 'Link') {
           add(node.from, node.to, markLink)
-          if (!onActiveLine) {
-            for (const child of node.node.children ?? []) {
-              if (child.name === 'URL') add(child.from, child.to, hide)
-            }
-          }
           return
         }
-        if (name === 'URL' && !onActiveLine) {
+        if (name === 'URL') {
+          const parent = node.node.parent?.name
+          if (!onActiveLine && (parent === 'Link' || parent === 'Image')) {
+            add(node.from, node.to, hide)
+            return
+          }
           // 裸 URL 仍显示,只弱化
           add(node.from, node.to, markUrl)
           return
