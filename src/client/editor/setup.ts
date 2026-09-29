@@ -14,8 +14,9 @@
 
 import {
   EditorState,
-  RangeSetBuilder,
+  RangeSet,
   type Extension,
+  type Text,
 } from '@codemirror/state'
 import {
   Decoration,
@@ -57,6 +58,26 @@ const lineDecorations: Record<string, Decoration> = {
   quote: Decoration.line({ class: 'dsh-cm-quote' }),
   rule: Decoration.line({ class: 'dsh-cm-rule' }),
   code: Decoration.line({ class: 'dsh-cm-code-line' }),
+  frontmatter: Decoration.line({ class: 'dsh-cm-frontmatter' }),
+}
+
+/**
+ * 文档开头的 YAML frontmatter 区间。
+ *
+ * 必须单独认出来:lezer 会把 `dsh-note-id: x` + 收尾 `---` 解析成 **SetextHeading2**,
+ * 不处理的话笔记元数据会被渲染成一个二级标题(实测就是这样)。
+ * @param doc - 文档。
+ * @returns 区间与末行号;没有 frontmatter 时返回 null。
+ */
+function frontmatterRange(doc: Text): { to: number; lastLine: number } | null {
+  if (doc.lines < 2) return null
+  if (doc.line(1).text.trim() !== '---') return null
+  const limit = Math.min(doc.lines, 60)
+  for (let number = 2; number <= limit; number += 1) {
+    const text = doc.line(number).text.trim()
+    if (text === '---' || text === '...') return { to: doc.line(number).to, lastLine: number }
+  }
+  return null
 }
 
 /** 需要连同标记一起隐藏的节点(标记名 → 装饰)。 */
@@ -189,11 +210,26 @@ function activeLines(state: EditorState): Set<number> {
 
 /** 计算一次可见区的装饰集。 */
 function buildDecorations(view: EditorView, documentPath: string | null): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>()
   const state = view.state
+  // 先收集、最后统一由 `RangeSet.of(..., true)` 排序:
+  // 行装饰与同一位置的「标记替换」会落在**同一个 from**,用 RangeSetBuilder
+  // 顺序追加会抛 "Ranges must be added sorted" —— 实测后果是整个装饰层静默消失
+  // (h1Count=0,而且不报错)。
+  const list: Array<{ from: number; to: number; deco: Decoration }> = []
+  const add = (from: number, to: number, deco: Decoration): void => {
+    list.push({ from, to, deco })
+  }
   const keepSource = activeLines(state)
   const codeRanges: Array<{ from: number; to: number }> = []
   const inlineHighlights: Array<{ from: number; to: number }> = []
+  const frontmatter = frontmatterRange(state.doc)
+
+  if (frontmatter !== null) {
+    for (let number = 1; number <= frontmatter.lastLine; number += 1) {
+      const line = state.doc.line(number)
+      add(line.from, line.from, lineDecorations.frontmatter)
+    }
+  }
 
   for (const { from, to } of view.visibleRanges) {
     syntaxTree(state).iterate({
@@ -201,20 +237,22 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
       to,
       enter: (node) => {
         const name = node.name
+        // frontmatter 区间内一律不装饰(否则元数据会被当成 Setext 标题/分隔线)
+        if (frontmatter !== null && node.from < frontmatter.to) return
         const line = state.doc.lineAt(node.from)
         const onActiveLine = keepSource.has(line.number)
 
         // 行级:标题 / 引用 / 分隔线
         const lineKey = HEADING_LINES[name]
         if (lineKey !== undefined) {
-          builder.add(line.from, line.from, lineDecorations[lineKey])
+          add(line.from, line.from, lineDecorations[lineKey])
         } else if (name === 'Blockquote') {
-          builder.add(line.from, line.from, lineDecorations.quote)
+          add(line.from, line.from, lineDecorations.quote)
         } else if (name === 'HorizontalRule') {
-          builder.add(line.from, line.from, lineDecorations.rule)
+          add(line.from, line.from, lineDecorations.rule)
           return
         } else if (name === 'FencedCode' || name === 'CodeBlock') {
-          builder.add(line.from, line.from, lineDecorations.code)
+          add(line.from, line.from, lineDecorations.code)
           codeRanges.push({ from: node.from, to: node.to })
           return
         }
@@ -222,12 +260,12 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
         // 行内:加粗/斜体/行内码/删除线
         const mark = INLINE_MARKS[name]
         if (mark !== undefined) {
-          builder.add(node.from, node.to, mark)
+          add(node.from, node.to, mark)
           if (name === 'InlineCode') codeRanges.push({ from: node.from, to: node.to })
           // 标记符号:非活动行隐藏
           if (!onActiveLine) {
             for (const child of node.node.children) {
-              if (MARKER_NODES.has(child.name)) builder.add(child.from, child.to, hide)
+              if (MARKER_NODES.has(child.name)) add(child.from, child.to, hide)
             }
           }
           return
@@ -236,24 +274,24 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
         // 标题的 `#`:非活动行隐藏
         if (HEADING_LINES[name] !== undefined && !onActiveLine) {
           for (const child of node.node.children) {
-            if (child.name === 'HeaderMark') builder.add(child.from, child.to, hide)
+            if (child.name === 'HeaderMark') add(child.from, child.to, hide)
           }
           return
         }
 
         // 链接:隐藏 URL 部分(保留文字)
         if (name === 'Link') {
-          builder.add(node.from, node.to, markLink)
+          add(node.from, node.to, markLink)
           if (!onActiveLine) {
             for (const child of node.node.children) {
-              if (child.name === 'URL') builder.add(child.from, child.to, hide)
+              if (child.name === 'URL') add(child.from, child.to, hide)
             }
           }
           return
         }
         if (name === 'URL' && !onActiveLine) {
           // 裸 URL 仍显示,只弱化
-          builder.add(node.from, node.to, markUrl)
+          add(node.from, node.to, markUrl)
           return
         }
 
@@ -263,9 +301,9 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
           const match = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$/.exec(raw)
           const url = match === null ? undefined : resolveImageUrl(documentPath, match[2])
           if (url !== undefined && !onActiveLine) {
-            builder.add(node.from, node.to, Decoration.replace({ widget: new ImageWidget(url, match?.[1] ?? '') }))
+            add(node.from, node.to, Decoration.replace({ widget: new ImageWidget(url, match?.[1] ?? '') }))
           } else if (url !== undefined) {
-            builder.add(node.from, node.to, markLink)
+            add(node.from, node.to, markLink)
           }
           return
         }
@@ -273,7 +311,7 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
         // 任务框
         if (name === 'TaskMarker') {
           const raw = state.doc.sliceString(node.from, node.to)
-          builder.add(
+          add(
             node.from,
             node.to,
             Decoration.replace({ widget: new TaskWidget(/\[[xX]\]/.test(raw), node.from, node.to) }),
@@ -304,12 +342,15 @@ function buildDecorations(view: EditorView, documentPath: string | null): Decora
       }
     }
   }
-  for (const range of inlineHighlights.sort((left, right) => left.from - right.from)) {
+  for (const range of inlineHighlights) {
     const isMarker = range.to - range.from === 2
-    builder.add(range.from, range.to, isMarker ? hide : markHighlight)
+    add(range.from, range.to, isMarker ? hide : markHighlight)
   }
 
-  return builder.finish()
+  return RangeSet.of(
+    list.map((item) => item.deco.range(item.from, item.to)),
+    true,
+  )
 }
 
 /** 装饰插件。 */
@@ -380,7 +421,13 @@ const theme = EditorView.theme({
   },
   '.dsh-cm-link': { color: 'var(--dsw-alias-brand-primary)', textDecoration: 'none' },
   '.dsh-cm-url': { color: 'var(--dsw-alias-label-secondary)' },
-  '.dsh-cm-rule': { borderTop: '1px solid var(--dsw-alias-border-l1)' },
+  '.cm-dsh-rule': { borderTop: '1px solid var(--dsw-alias-border-l1)' },
+  '.dsh-cm-frontmatter': {
+    color: 'var(--dsw-alias-label-secondary)',
+    fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)',
+    fontSize: '0.86em',
+    background: 'var(--dsw-alias-bg-layer-1)',
+  },
   '.dsh-cm-code-line': {
     fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)',
     background: 'var(--dsw-alias-bg-layer-1)',
