@@ -1,0 +1,53 @@
+{
+  "name": "dsh-notes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH 笔记工作区:右侧栏一个独立「笔记」区域(可收起的笔记树 + CodeMirror 6 编辑器),纯 Markdown + 薄索引,按工作区组织",
+  "icon": "./icon.svg",
+  "meta": {
+    "title": "笔记工作区",
+    "description": "在右侧栏开一个独立的笔记区域:左侧是可收起的笔记树(分类/未归类/跨工作区映射),右侧是 Markdown 编辑器。笔记就是普通 .md 文件,索引只是一层薄映射。"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "lib",
+    "src",
+    "scripts",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "AGENTS.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  }
+}

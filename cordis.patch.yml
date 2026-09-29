@@ -1,0 +1,22 @@
+# dsh-notes 的 bundle patch:插入一行。Host 与 Client 同属本包
+# (`dsh.client` 声明在 package.json,导出的 ./client 即浏览器产物)。
+# 行内相对路径以本文件所在目录为锚点;包名即本包,从 profile 解析。
+- insert:
+    - id: dsh-notes
+      name: dsh-notes
+      config:
+        # 笔记根:相对工作区根。默认 <workspaceRoot>/notes
+        notesDir: notes
+        # 粘贴/拖入图片的托管目录:相对工作区根,按 noteId 分子目录
+        assetsDir: .dsh-assets
+        # 索引目录;留空 = $DSH_HOME/knowledge
+        storeDir: ''
+        # 「未归类」扫描的深度与条数上限
+        unfiledDepth: 3
+        unfiledMax: 200
+        # 自动保存的静默毫秒数;0 = 关闭自动保存(只留 Ctrl/Cmd+S)
+        autosaveMs: 800
+        # 粘贴图片策略:copy = 复制进托管目录;link = 保持原路径引用
+        pasteImage: copy
+        # 文件监视(外部改名/删除对账);关闭后改为打开笔记时对账 + 手动重扫
+        watch: true
