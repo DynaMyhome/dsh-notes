@@ -379,7 +379,15 @@ function buildDecorations(
       const end = start + match[0].length
       if (codeRanges.some((range) => start < range.to && end > range.from)) continue
       const target = match[1].trim()
-      add(start, end, known.has(target) ? markWiki : markWikiNew)
+      const innerFrom = start + 2
+      const innerTo = innerFrom + match[1].length
+      add(innerFrom, innerTo, known.has(target) ? markWiki : markWikiNew)
+      // 非活动行把 `[[`/`]]` 也一起收起(与链接一致:只留文字)
+      const line = state.doc.lineAt(start)
+      if (!keepSource.has(line.number)) {
+        add(start, start + 2, hide)
+        add(end - 2, end, hide)
+      }
     }
   }
 
