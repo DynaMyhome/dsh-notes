@@ -40,16 +40,29 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 
 ```bash
 cd "<你克隆 dsh-notes 的目录>"
-npm install                 # 只为构建:esbuild
-npm run build               # src/client → lib/client.js
+npm run setup                # 装构建工具链(只有 esbuild,落在 scripts/node_modules)
+npm run build                # src/client → lib/client.js
 node --check lib/index.js && node --check lib/client.js
 node --test test/*.test.mjs
 ```
 
+**`node_modules` 是符号链接,不是装出来的**(本工作区惯例,同 `dsh-explain-sidebar`):
+
+```bash
+ln -s $DSH_HOME/profiles/<profile>/node_modules node_modules
+```
+
+原因:插件以 `link:` 装进 profile 后,Node 从**真实路径**(`/mnt/<盘>/...`)解析裸导入,
+找不到 `@deepseek-ai/*`;指向 profile 的 `node_modules` 才有全套 harness 包。
+所以**别在本目录跑 `npm install`** —— 那会生成真的 `node_modules` 并遮蔽符号链接,
+表现为 `dsh-notes (dsh-notes): failed to import`(Host 半整行 inactive)。
+构建工具链因此单独放在 `scripts/`(它有自己的 `package.json`)。
+
 - 装/更新:用 `plugin_manager` 的 `install_bundle`(target = 本目录绝对路径),
   **不要**手写 profile 的 `package.json` / `cordis.patch.yml`,**不要**在 profile 里跑 pnpm。
 - 改了客户端 → 重新 `npm run build` 后 `web_restart` + 刷新页面;改了 Host 半 → `web_restart`。
-- 验完在 `cordis_inspect_query`(client `Slots`,root `sidebar.right.pane.tab`)里确认占用者含 `dsh-notes`。
+- 验完在 `cordis_inspect_query`(client `Slots`,root `sidebar.right.pane.tab`)里确认占用者含 `dsh-notes`;
+  Host 侧看 `Config.listConfigs`(name=dsh-notes)的 `status` 必须是 `schema`,不是 `inactive`。
 
 > **升级/重装依赖之后**:先在**工作区根**跑那四组补丁校验脚本(见根 `AGENTS.md`),
 > 再重启 web —— 否则本机六组补丁可能已丢失(尤其 A2 临时组,仅 0.2.0-rc.1 需要)。
