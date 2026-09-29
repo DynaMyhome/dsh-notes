@@ -55,6 +55,7 @@ import { tags as tag } from '@lezer/highlight'
 import { moveSection as moveSectionText } from '../../../lib/section.js'
 import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
 import { decorateFromTree } from './decorate'
+import { tableBlocks, tableTab } from './table'
 
 /** 行内隐藏/标记装饰。 */
 const markStrong = Decoration.mark({ class: 'dsh-cm-strong' })
@@ -757,6 +758,8 @@ export function createEditor(options: {
       syntaxHighlighting(highlight),
       search({ top: true }),
       livePreview(options.documentPath, options.getKnownTitles),
+      // 块级装饰必须来自 StateField(CM6 禁止插件提供跨行替换):真表格 + 单元格交互
+      tableBlocks(),
       theme,
       // 图片:粘贴或拖入 → 交给外壳上传(见 NotesPane)
       EditorView.domEventHandlers({
@@ -812,6 +815,9 @@ export function createEditor(options: {
         { key: 'Mod-5', preventDefault: true, run: (view) => (setHeading(view, 5), true) },
         { key: 'Mod-6', preventDefault: true, run: (view) => (setHeading(view, 6), true) },
         { key: 'Mod-0', preventDefault: true, run: (view) => (setHeading(view, 0), true) },
+        // 表格内 Tab = 跳单元格(末格追加一行);不在表格里才走缩进
+        { key: 'Tab', preventDefault: true, run: (view) => tableTab(view, false) },
+        { key: 'Shift-Tab', preventDefault: true, run: (view) => tableTab(view, true) },
         { key: 'Tab', preventDefault: true, run: indentMore },
         { key: 'Shift-Tab', preventDefault: true, run: indentLess },
         ...closeBracketsKeymap,
