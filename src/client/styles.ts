@@ -26,6 +26,13 @@ export const CSS = [
   '.dsh-notes-row:hover{background:var(--dsw-alias-bg-layer-2)}',
   '.dsh-notes-row-selected{background:var(--dsw-alias-bg-layer-2);box-shadow:inset 2px 0 0 var(--dsw-alias-brand-primary)}',
   '.dsh-notes-row-ref .dsh-notes-row-label{color:var(--dsw-alias-label-secondary)}',
+  /* 分类 vs 笔记:一眼可分 —— 分类加粗带文件夹;笔记常规字重、次要色 */
+  '.dsh-notes-row-collection .dsh-notes-row-label{font-weight:600;color:var(--dsw-alias-label-primary)}',
+  '.dsh-notes-row-note .dsh-notes-row-label,.dsh-notes-row-unfiled .dsh-notes-row-label{color:var(--dsw-alias-label-secondary)}',
+  '.dsh-notes-row-note.dsh-notes-row-selected .dsh-notes-row-label{color:var(--dsw-alias-label-primary)}',
+  '.dsh-notes-row-drop{background:var(--dsw-alias-bg-layer-2);box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary)}',
+  '.dsh-notes-drop-root{box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2)}',
+  '.dsh-notes-glyph{flex:0 0 auto;font-size:11px;line-height:1;opacity:.9}',
   '.dsh-notes-caret{flex:0 0 auto;width:12px;font-size:11px;color:var(--dsw-alias-label-secondary);text-align:center}',
   '.dsh-notes-row-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}',
   '.dsh-notes-count{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-label-secondary)}',

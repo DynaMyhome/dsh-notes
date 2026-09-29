@@ -182,6 +182,22 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     [run, t],
   )
 
+  /** 拖放:把笔记归入某个分类(`null` = 顶层/未归类)。 */
+  const onMoveNote = useCallback(
+    (noteId: string, collectionId: string | null) => {
+      void run('move', { noteId, collectionId }, () => setStatus(t('status.moved')))
+    },
+    [run, t],
+  )
+
+  /** 拖放:把分类挂到另一个分类下(`null` = 顶层)。 */
+  const onMoveCollection = useCallback(
+    (collectionId: string, parentId: string | null) => {
+      void run('collection', { op: 'move', collectionId, parentId }, () => setStatus(t('status.moved')))
+    },
+    [run, t],
+  )
+
   const toggleLabel = treeOpen ? t('tree.collapse') : t('tree.expand')
 
   // 动作区属于**笔记树这一列**(不是区域顶栏):新建笔记 / 新建分类 / 重扫 / 收起。
@@ -269,7 +285,9 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             ? t('status.noSession')
             : tree === null
               ? t('tree.loading')
-              : t('tree.summary').replace('{n}', String(tree.stats.notes))}
+              : t('tree.summary')
+                  .replace('{n}', String(tree.stats.notes))
+                  .replace('{c}', String(tree.stats.collections))}
         </span>
         <span className="dsh-notes-spacer" />
       </div>
@@ -299,6 +317,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                   setSelected(null)
                 }}
                 onFileAction={onFileAction}
+                onMoveNote={onMoveNote}
+                onMoveCollection={onMoveCollection}
               />
             </aside>
             <div
