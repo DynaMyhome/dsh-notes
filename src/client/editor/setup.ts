@@ -125,6 +125,9 @@ const MARKER_NODES = new Set([
   'QuoteMark',
   'LinkMark',
   'ListMark',
+  // 自定义行内语法(lib/markdown-syntax.js)的标记
+  'HighlightMark',
+  'WikiLinkMark',
 ])
 
 /** 标题节点名 → 行装饰键。 */
@@ -422,6 +425,26 @@ function buildDecorations(
           return
         }
 
+        // 高亮 `==…==`:真语法节点(见 lib/markdown-syntax.js),不再用正则二次扫描。
+        // 两侧的 `==` 由下面的 MARKER_NODES 通用规则(HighlightMark)在非活动行隐藏。
+        if (name === 'Highlight') {
+          add(node.from, node.to, markHighlight)
+          return
+        }
+
+        // 双链 `[[标题]]`:同上;命中已存在标题 = 实色,否则虚线
+        if (name === 'WikiLink') {
+          const inner = state.doc.sliceString(node.from + 2, node.to - 2)
+          const target = (inner.split('|')[0] ?? '').trim()
+          const known = getKnownTitles?.() ?? new Set<string>()
+          add(node.from + 2, node.to - 2, known.has(target) ? markWiki : markWikiNew)
+          if (!onActiveLine) {
+            add(node.from, node.from + 2, hide)
+            add(node.to - 2, node.to, hide)
+          }
+          return
+        }
+
         // 链接:文字着色;链接里的 URL 在非活动行隐藏(见下面 URL 分支)
         if (name === 'Link') {
           add(node.from, node.to, markLink)
@@ -484,51 +507,6 @@ function buildDecorations(
         if (name === 'InlineCode') return
       },
     })
-  }
-
-  // `==高亮==` 的正则补充(跳过代码区)
-  for (const { from, to } of view.visibleRanges) {
-    const text = state.doc.sliceString(from, to)
-    const re = /==([^=\n]{1,400})==/g
-    let match: RegExpExecArray | null
-    while ((match = re.exec(text)) !== null) {
-      const start = from + match.index
-      const end = start + match[0].length
-      if (codeRanges.some((range) => start < range.to && end > range.from)) continue
-      const line = state.doc.lineAt(start)
-      const onActiveLine = keepSource.has(line.number)
-      inlineHighlights.push({ from: start + 2, to: end - 2 })
-      if (!onActiveLine) {
-        inlineHighlights.push({ from: start, to: start + 2 }, { from: end - 2, to: end })
-      }
-    }
-  }
-  for (const range of inlineHighlights) {
-    const isMarker = range.to - range.from === 2
-    add(range.from, range.to, isMarker ? hide : markHighlight)
-  }
-
-  // `[[双链]]`:lezer 也不认,同样按区间处理;能对上已有笔记的用实色,否则虚线(点了会新建)
-  const known = getKnownTitles?.() ?? new Set<string>()
-  for (const { from, to } of view.visibleRanges) {
-    const text = state.doc.sliceString(from, to)
-    const re = /\[\[([^\]\n|]{1,200})(\|[^\]\n]{0,200})?\]\]/g
-    let match: RegExpExecArray | null
-    while ((match = re.exec(text)) !== null) {
-      const start = from + match.index
-      const end = start + match[0].length
-      if (codeRanges.some((range) => start < range.to && end > range.from)) continue
-      const target = match[1].trim()
-      const innerFrom = start + 2
-      const innerTo = innerFrom + match[1].length
-      add(innerFrom, innerTo, known.has(target) ? markWiki : markWikiNew)
-      // 非活动行把 `[[`/`]]` 也一起收起(与链接一致:只留文字)
-      const line = state.doc.lineAt(start)
-      if (!keepSource.has(line.number)) {
-        add(start, start + 2, hide)
-        add(end - 2, end, hide)
-      }
-    }
   }
 
   return RangeSet.of(
