@@ -653,6 +653,15 @@ const theme = EditorView.theme({
     borderTopLeftRadius: '6px',
     borderTopRightRadius: '6px',
   },
+  '.dsh-cm-code-end': {
+    // 收尾围栏行:折叠成一条细缝,视觉上不留空行
+    height: '0',
+    lineHeight: '0',
+    overflow: 'hidden',
+    background: 'var(--dsw-alias-bg-layer-1)',
+    borderBottomLeftRadius: '6px',
+    borderBottomRightRadius: '6px',
+  },
   '.dsh-cm-table-delim': { color: 'var(--dsw-alias-label-secondary)', opacity: '.45' },
   '.dsh-cm-table-head': {
     fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)',
