@@ -37,6 +37,8 @@ export const CSS = [
   '.dsh-notes-row-ins-inside{background:var(--dsw-alias-bg-layer-2);box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary);border-radius:5px}',
   '.dsh-notes-row-dragging{opacity:.45}',
   '.dsh-notes-drop-chip{position:fixed;z-index:40;pointer-events:none;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 9px;border-radius:999px;font-size:11px;line-height:1.7;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);box-shadow:0 6px 18px rgba(0,0,0,.2)}',
+  '.dsh-notes-tree-body-dragging{background:color-mix(in srgb, var(--dsw-alias-brand-primary) 4%, transparent)}',
+  '.dsh-notes-drop-line{height:2px;margin:3px 8px;border-radius:2px;background:var(--dsw-alias-brand-primary)}',
   '.dsh-notes-drop-root{box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary)}',
   '.dsh-notes-glyph{flex:0 0 auto;font-size:11px;line-height:1;opacity:.9}',
   '.dsh-notes-caret{flex:0 0 auto;width:12px;font-size:11px;color:var(--dsw-alias-label-secondary);text-align:center}',
