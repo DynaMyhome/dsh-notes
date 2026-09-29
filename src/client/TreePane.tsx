@@ -49,6 +49,10 @@ export interface TreePaneProps {
   onDismissError: () => void
   toolbar?: React.ReactNode
   header?: React.ReactNode
+  /** 就地新建输入条:渲染成树里的**一行**(在目标层级末尾),而不是顶栏压下来。 */
+  composer?: React.ReactNode
+  /** 输入条所属分类(`null` = 顶层),只用于算缩进。 */
+  composerParent?: string | null
 }
 
 /** 行的落点分区。 */
@@ -582,6 +586,17 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
         )}
         {/* 拖到空白处 = 放到顶层末尾:给一条末端指示线,而不是一个框 */}
         {dragging !== null && drop?.key === '__root' ? <div className="dsh-notes-drop-line" /> : null}
+        {/* 就地新建:作为列表里的一行出现(缩进跟随目标分类),上面已有内容不位移 */}
+        {props.composer !== undefined && props.composer !== null ? (
+          <div
+            className="dsh-notes-row dsh-notes-row-compose"
+            style={{
+              paddingLeft: `${6 + (props.composerParent == null ? 0 : (rows.find((row) => row.key === `c:${props.composerParent}`)?.depth ?? 0) + 1) * 12}px`,
+            }}
+          >
+            {props.composer}
+          </div>
+        ) : null}
       </div>
 
       {dragging !== null && drop !== null ? (

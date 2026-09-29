@@ -488,7 +488,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     error={error}
                     selectedId={selected?.id ?? null}
                     toolbar={toolbar}
-                    header={composeRow}
+                    composer={composeRow}
+                    composerParent={composeParent}
                     onSelectNote={(note) => {
                       setSelected(note)
                       setSelectedRef(null)
