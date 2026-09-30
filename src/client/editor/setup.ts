@@ -947,9 +947,17 @@ export function createEditor(options: {
             '.cm-line',
           ) as HTMLElement | null
           if (hitLine === null) return false
-          const rect = hitLine.getBoundingClientRect()
-          // y 夹在这一行内部再解析位置:指针在这一行里就归这一行(修"下移一点就跳下一行")
-          const y = Math.min(Math.max(event.clientY, rect.top + 2), rect.bottom - 2)
+          // 关键:用**文字本身的矩形**取纵向中点,而不是行盒的中点。
+          // 行盒常常比文字高(行高 1.7、标题的 padding、代码块的额外高度),用行盒中点
+          // 时这个 y 已经落在文字带下方,浏览器会把位置解析到**下一行**
+          // (实测:点 `test、` 行会被丢到下一行 `丢掉`;标题那次的"跳行"同源)。
+          const textRange = document.createRange()
+          textRange.selectNodeContents(hitLine)
+          const textRect = textRange.getBoundingClientRect()
+          const y =
+            textRect.height > 0
+              ? textRect.top + textRect.height / 2
+              : hitLine.getBoundingClientRect().top + hitLine.getBoundingClientRect().height / 2
           const pos = view.posAtCoords({ x: event.clientX, y })
           if (pos === null) return false
           view.dispatch({ selection: { anchor: pos } })
