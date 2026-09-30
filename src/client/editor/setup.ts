@@ -779,6 +779,22 @@ const theme = EditorView.theme({
   '.dsh-cm-math math': { fontSize: '1.02em' },
   // 块级公式(`$$ … $$` 独占整段):块级 widget —— 用 padding 不用 margin
   // (margin 不进 CM6 的行高测量,会让后面所有行的落点整体偏移)
+  /* frontmatter 折叠成的一行 chip(预览模式;点一下展开成源码) */
+  '.dsh-cm-meta-chip': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    margin: '2px 0 4px',
+    padding: '1px 8px',
+    fontSize: '11px',
+    lineHeight: '1.7',
+    color: 'var(--dsw-alias-label-secondary)',
+    background: 'var(--dsw-alias-bg-layer-2)',
+    border: '1px solid var(--dsw-alias-border-l1)',
+    borderRadius: '999px',
+    cursor: 'text',
+    userSelect: 'none',
+  },
   '.dsh-cm-math-block': {
     display: 'block',
     padding: '6px 0',

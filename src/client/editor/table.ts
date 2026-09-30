@@ -15,6 +15,7 @@ import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 
 import { isSourceMode } from './mode'
+import { frontmatterEndOf } from './frontmatter'
 import { jsxLanguage, tsxLanguage, javascript, javascriptLanguage, typescriptLanguage } from '@codemirror/lang-javascript'
 import { json, jsonLanguage } from '@codemirror/lang-json'
 import { python, pythonLanguage } from '@codemirror/lang-python'
@@ -129,6 +130,36 @@ class BlockMathWidget extends WidgetType {
   ignoreEvent(): boolean {
     // 自己处理 mousedown,不让 CM6 再接管
     return true
+  }
+}
+
+/**
+ * frontmatter 折叠成的一行 chip(预览模式)。
+ *
+ * 文件里仍然保留 `dsh-note-id` 等键值(可恢复、Agent 也能读),只是界面干净;
+ * 点一下把光标送进 frontmatter,按既有 reveal 规则展开成源码再改。
+ */
+class FrontmatterWidget extends WidgetType {
+  constructor(readonly summary: string) {
+    super()
+  }
+
+  eq(other: FrontmatterWidget): boolean {
+    return other.summary === this.summary
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const box = document.createElement('div')
+    box.className = 'dsh-cm-meta-chip'
+    box.textContent = '⋯ 元数据'
+    box.title = this.summary === '' ? '点击展开源码' : this.summary
+    box.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true })
+      view.focus()
+    })
+    return box
   }
 }
 
@@ -250,9 +281,22 @@ function selectionTouches(state: EditorState, from: number, to: number): boolean
 export function buildTableDecorations(state: EditorState): DecorationSet {
   // 源码模式:不加任何块级装饰
   if (isSourceMode()) return Decoration.none
-  const tree = ensureSyntaxTree(state, state.doc.length, 60)
-  if (tree === null) return Decoration.none
   const ranges = []
+  // frontmatter(文档开头)→ 预览时收成一行「⋯ 元数据」chip。
+  // 它是**整行替换**,必须由 StateField 提供(插件层不允许替换换行)。
+  const metaEnd = frontmatterEndOf(state)
+  if (metaEnd !== null && !selectionTouches(state, 0, metaEnd)) {
+    const body = state.doc.sliceString(0, metaEnd)
+    const summary = body
+      .replace(/^---\r?\n?/, '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && line !== '---')
+      .join(' · ')
+    ranges.push(Decoration.replace({ widget: new FrontmatterWidget(summary), block: true }).range(0, metaEnd))
+  }
+  const tree = ensureSyntaxTree(state, state.doc.length, 60)
+  if (tree === null) return RangeSet.of(ranges, true)
   tree.iterate({
     enter: (node) => {
       // 公式块 `$$ … $$`:**独占整行(可多行)就渲染成块级 widget,前后不必空行**。
