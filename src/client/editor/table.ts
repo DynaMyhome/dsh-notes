@@ -318,8 +318,14 @@ class CodeCardWidget extends WidgetType {
     const first = this.source.split('\n')[0] ?? ''
     const fence = /^\s*(```|~~~)/.exec(first)?.[1] ?? '```'
 
+    // 外层只负责**上下留白**,留白必须用 padding 而不是 margin:
+    // CM6 的行高测量只取 widget 的边框盒高度(不含外边距),一旦用了 margin,
+    // 每个代码块就会让其后所有行的"点击落点"整体上移 ~12px —— 表现就是
+    // "鼠标明明在这一行,稍微往下一点就选中了下一行"。内层才是视觉上的卡片。
+    const root = document.createElement('div')
+    root.className = 'dsh-cm-code-card'
     const card = document.createElement('div')
-    card.className = 'dsh-cm-code-card'
+    card.className = 'dsh-cm-code-card-inner'
     const bar = document.createElement('div')
     bar.className = 'dsh-cm-code-bar'
     const label = document.createElement('span')
@@ -390,7 +396,8 @@ class CodeCardWidget extends WidgetType {
     })
 
     card.append(bar, body)
-    return card
+    root.appendChild(card)
+    return root
   }
 
   ignoreEvent(): boolean {

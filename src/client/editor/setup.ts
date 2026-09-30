@@ -704,9 +704,14 @@ const theme = EditorView.theme({
     borderBottomLeftRadius: '6px',
     borderBottomRightRadius: '6px',
   },
-  // 代码块卡片(块级 widget):圆角 + 顶栏(语言 / 复制)+ 等宽正文
+  // 代码块卡片(块级 widget):圆角 + 顶栏(语言 / 复制)+ 等宽正文。
+  // 上下留白只能给 padding,**不能给 margin**:CM6 的行高测量只取 widget 的
+  // 边框盒高度,外边距不计入行高映射 —— 用 margin 时每个卡片都会让后续所有行的
+  // 落点整体偏移(~6px×2),表现就是"鼠标还在这一行,稍往下就选中下一行"。
   '.dsh-cm-code-card': {
-    margin: '6px 0',
+    padding: '6px 0',
+  },
+  '.dsh-cm-code-card-inner': {
     border: '1px solid var(--dsw-alias-border-l1)',
     borderRadius: '8px',
     overflow: 'hidden',
@@ -911,24 +916,12 @@ export function createEditor(options: {
       tableBlocks(),
       // 点**内容区之外**的空白(下方留白 / 右侧留白)→ 光标落文末并聚焦(Obsidian 手感)。
       //
-      // 教训:这里曾经还想顺手修"点行下半部会选到下一行",做法是在内容区内自己推算 y
-      // 再 posAtCoords。结果在行高不一致的地方(标题、代码块、空行)把光标丢到相邻行 ——
-      // 用户实测"点标题上面一行会跳到标题",而且是全局性的。内容区内的落点判定一律交回
-      // CM6 自己,不再自作聪明。
-      EditorView.domEventHandlers({
-        mousedown(event, view) {
-          const target = event.target as HTMLElement | null
-          if (target === null) return false
-          // widget(表格/代码卡片/图片/复选框/项目符号)有自己的交互
-          if (target.closest('.dsh-cm-table, .dsh-cm-code-card, .dsh-cm-image, .dsh-cm-task, .dsh-cm-bullet') !== null) return false
-          // 内容区内:不拦
-          if (target.closest('.cm-content') !== null) return false
-          event.preventDefault()
-          view.dispatch({ selection: { anchor: view.state.doc.length } })
-          view.focus()
-          return true
-        },
-      }),
+      // 教训一:内容区**之内**的落点判定一律交回 CM6 自己 —— 曾经在这里推算 y 再
+      // posAtCoords,在行高不一致处(标题/代码块/空行)把光标丢到相邻行,全局复现。
+      // 教训二:`EditorView.domEventHandlers` 与 CM6 内置 mousedown 一样只挂在
+      // **contentDOM** 上(见 @codemirror/view 里 `let dom = this.view.contentDOM`),
+      // 所以挂在这里的"内容区之外"分支永远收不到事件 —— 那段是死代码。
+      // 真正处理空白点击的监听改挂在 `view.dom` 上,见 createEditor 里的 onEditorMousedown。
       theme,
       // 图片:粘贴或拖入 → 交给外壳上传(见 NotesPane)
       EditorView.domEventHandlers({
@@ -1008,13 +1001,53 @@ export function createEditor(options: {
     ],
   })
   const view = new EditorView({ state, parent: options.parent })
+
+  /**
+   * 内容区**之外**的空白点击(右侧留白 / 编辑器上下边缘)→ 落光标 + 聚焦。
+   *
+   * 为什么必须自己挂:`EditorView.domEventHandlers` 和 CM6 内置的 mousedown 都只注册在
+   * contentDOM 上,点在 `.cm-scroller` 空白处时 CM6 什么也不做,而 contenteditable 会因
+   * 为点到了不可编辑区域而**失焦** —— 用户看到的就是"光标被取消掉"。
+   *
+   * 只处理内容区之外的左键:内容区内的点击一律交回 CM6(它自己的映射才是权威);
+   * 滚动条上放行,否则拖滚动条会变成移动光标。
+   */
+  const onEditorMousedown = (event: MouseEvent): void => {
+    if (event.button !== 0) return
+    const target = event.target as HTMLElement | null
+    if (target === null) return
+    // 目标已经被重绘掉的情况:点 widget(代码卡片/表格)时,它的 mousedown 处理器会
+    // 立刻 dispatch → widget 换成源码 → 当前节点**脱离文档**,于是后面
+    // `closest('.cm-content')` 会返回 null,把 widget 点击误判成"内容区之外"。
+    // 必须先用 contains 判活,否则会把光标从代码块里踢出去。
+    if (!view.dom.contains(target)) return
+    if (view.contentDOM.contains(target)) return
+    const box = view.scrollDOM.getBoundingClientRect()
+    const barX = view.scrollDOM.offsetWidth - view.scrollDOM.clientWidth
+    const barY = view.scrollDOM.offsetHeight - view.scrollDOM.clientHeight
+    if (barX > 0 && event.clientX >= box.right - barX - 1) return
+    if (barY > 0 && event.clientY >= box.bottom - barY - 1) return
+    const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false) ?? view.state.doc.length
+    event.preventDefault()
+    view.dispatch({ selection: { anchor: position } })
+    view.focus()
+  }
+  view.dom.addEventListener('mousedown', onEditorMousedown)
+
+  // 验证/自动化用:把 EditorView 挂在宿主元素上(不污染 window,随元素一起回收)。
+  // 有了它才能在浏览器里直接核对"点击坐标 → 落点行"的映射,不用靠反复点击试探。
+  ;(options.parent as HTMLElement & { __dshView?: EditorView }).__dshView = view
+
   return {
     view,
     setDoc: (text: string) => {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } })
     },
     focus: () => view.focus(),
-    destroy: () => view.destroy(),
+    destroy: () => {
+      view.dom.removeEventListener('mousedown', onEditorMousedown)
+      view.destroy()
+    },
     getDoc: () => view.state.doc.toString(),
     moveSection: (fromLine: number, toLine: number, mode: 'before' | 'after') => {
       const result = moveSectionText(view.state.doc.toString(), fromLine, toLine, mode)
