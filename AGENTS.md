@@ -8,9 +8,16 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 1. **永不删除、永不移动用户的 `.md`。** 插件只做三种写入:保存笔记内容(守卫式,带
    `expectedVersion`)、新建笔记文件、写资产文件。文件级删除/移动/改名仍归文件树与
    Agent 的通用文件工具。UI 里的「移除」= 只删索引条目。
+   **两处例外,都只在用户显式动作下发生**(代码里都有注释):
+   - **改名**:右键「重命名」/ 新建后行内改名 → 同目录 `rename`,目标已存在则拒绝(绝不覆盖);
+   - **删除 = 移入回收站**:右键「Delete (move to trash)」→ 文件挪到
+     `$DSH_HOME/knowledge/trash/`(在笔记根之外,重扫捞不回来)+ 索引移除,**可恢复**;
+     真正的 `unlink` 只发生在「彻底删除 / 清空回收站」,且要点两次确认;
+     恢复时原位置被占用则拒绝,绝不覆盖。
 2. **Markdown 是权威,索引是可重建的派生态。** 索引在
    `$DSH_HOME/knowledge/registry.json`(或 `Config.storeDir`);笔记身份靠 frontmatter 里的
-   `dsh-note-id`,索引丢了用 `rescan` 恢复。索引**绝不**反向复活已删除的文件,也不做回收站。
+   `dsh-note-id`,索引丢了用 `rescan` 恢复。索引**绝不**反向复活已删除的文件;
+   回收站是独立一层(`trash/index.json`),不参与对账。
 3. **只有一套内容工具。** 读/写/改/搜继续用 `read` / `write` / `edit` / `glob` / `grep` / `bash`;
    本插件只额外提供 `knowledge` 工具(登记/注销/归类/分类树/未归类/重扫)。不许再长一套 note CRUD。
 4. **不改 DSH 核心。** 只用官方扩展点:`ctx.sidebarRightTabs` / `ctx.slots`(`sidebar.right.pane.tab`)、
@@ -71,3 +78,24 @@ ln -s $DSH_HOME/profiles/<profile>/node_modules node_modules
 
 运行中的 harness(`cordis_inspect_list` / `cordis_inspect_query`)与已安装包的
 `lib/types/*.d.ts` 是权威,不是本文档,也不是记忆。
+
+<!-- project-context:begin -->
+## Project Context
+
+This directory is a Managed Project. Long-term project memory lives in `AGENTS.md`.
+Those files are a low-frequency projection of the code: the code is always the
+final source of truth for current behavior.
+
+Rules for agents working here:
+
+- Canonical documents may be written **only** when the user asks for project
+  initialization or for a core-memory update, and confirms the plan or proposal
+  first. Ordinary development, status checks, and architecture refreshes must
+  not modify them.
+- After a task that changed files in this project, append one lightweight line to
+  `.agent-context/changes.jsonl` using the `project-context` skill. Do not record
+  pure questions, read-only analysis, formatting-only changes, or tasks with no
+  file changes.
+- Do not edit anything under `.agent-context/` by hand; it is maintained by the
+  `project-context` skill.
+<!-- project-context:end -->
