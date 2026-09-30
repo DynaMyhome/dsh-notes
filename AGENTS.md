@@ -43,6 +43,35 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
   版本/大小没变就不读文件;变了才用 `fs.readByteRange` 读前 4KB 解 id。
 - 「忽略」只动映射,永不删文件;已登记的文件被删 → 走目录时按 id 找不到 → 条目一起消失。
 
+## 渲染管线与热路径(最容易踩坑,改动前先读)
+
+编辑器是 CodeMirror 6。渲染分三层,分层理由全是 CM6 的硬约束,不是审美:
+
+| 层 | 文件 | 职责与约束 |
+| --- | --- | --- |
+| **决策层(纯函数)** | `lib/markdown-render.js` + `lib/markdown-syntax.js` | 输入「语法树 + 文本 + 选区 + knownTitles」,输出装饰**描述**(`line`/`hide`/`mark`/`widget`)。"该藏还是该露"的规则**只在这里**;`==高亮==`、`[[双链]]`、`$…$`、`$$…$$` 在 syntax 文件里注册成 lezer 真节点(不用正则二次扫描) |
+| **行内层(ViewPlugin)** | `src/client/editor/decorate.ts` | 把描述翻译成 CM6 装饰。插件层**不能跨行替换**,所以这里只做行级/行内;出错由 `safeBuild` 兜底(退回旧构建器 → 空集),绝不让装饰层带崩编辑器 |
+| **块级层(StateField)** | `src/client/editor/table.ts` | 跨行替换**只能**由 StateField 提供:元数据 chip、真 `<table>` widget(单元格就地编辑、表内右键插删行列)、代码卡、块级公式。它在**每次文档/选区变更**都重建 → 构建有 try/catch(`safeTableDecorations`),且按**每个编辑器**的 `sourceMode` 决定加不加装饰 |
+| **装配** | `src/client/editor/setup.ts` | `createEditor()` 组装主题/键位/输入规则/点击命中/工具栏命令;`livePreview(...)` 与 `tableBlocks(sourceMode)` 在这里挂上去。**两栏分屏时两者都必须按编辑器取模式**,读模块级单例会让"另一栏切源码 → 这栏装饰全丢" |
+
+**四条硬规则(都是踩过的坑,动热路径前先读):**
+
+1. **CM6 选区必须用 `EditorSelection.range(...)`。** 传 `{ anchor, head }` 普通对象会被
+   `state.changeByRange` **原样**塞进 `state.selection`;下一次需要映射选区的事务(打字、粘贴、
+   `setDoc`)就在 `EditorSelection.map` 里抛 `TypeError: r.map is not a function`,CM6 的输入
+   处理还会先读 `sel.from` 在 `doc.lineAt` 上抛错 → **编辑器卡死,只能打开别的笔记再点回来**
+   (重建 EditorState 才恢复)。纯逻辑在 `src/client/editor/selection.ts`,靶子在
+   `test/selection.test.mjs`(含一条反向锁:用普通对象冒充必须抛错)。
+2. **lezer 在本环境 `SyntaxNode.children` 恒为 `null`。** 遍历子节点只能用 `firstChild` /
+   `nextSibling`;项目里有现成的 `childrenOf()`(见 `lib/markdown-render.js`)。
+3. **`@lezer/markdown` 的 `Table` 节点会把"紧跟表格的非空行"也算成 `TableRow`。** 块级侧要
+   `clampTableRange` 夹到"最后一个含 `|` 的行"(否则那行被整块 replace 隐藏);决策层同样夹取,
+   并对**夹取点之后**的子节点继续 `walk`(否则那些行永远拿不到行内装饰 —— 用户实测:表格下
+   紧跟的 `[[链接]]` 一直显示原文)。
+4. **单测必须与运行时同构。** 解析器要用
+   `markdownLanguage.parser.configure(markdownSyntaxConfig())`;裸 `markdownLanguage.parser`
+   没有自定义行内语法,`[[x]]` 会被解析成普通 `Link`,靶子用例永远是红的。
+
 ## 身份、标题与多文档
 
 - **标题 = 文件名**(Obsidian 模型)。正文里的 H1 只是正文,`[[链接]]` 也按文件名解析。
@@ -53,6 +82,22 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
   (`dsh-notes:tabs:<workspaceKey>`),最多 8 个标签/栏;标签页保持挂载(切标签不重读盘)。
 - **工作区切换**:内容路由都接受 `workspaceKey`(**只认已登记的**);用户侧写入的策略
   `policyFor` = **模式仍来自会话**(read-only 依旧只读),**边界根换成目标工作区根**。
+
+## 功能现状(已交付,别重复造)
+
+- **编辑器**:预览/源码**按栏独立**(表头按钮切换);工具栏 23 键(7 组 + 4 弹层:标题 / 链接 /
+  表格 / 公式);右键菜单 = 「引用此处」+ 文本格式 / 段落设置 / 插入(**表内**右键换成插删行列);
+  `[[` 补全(Tab 接受、不再多出 `]]`);图片粘贴/拖入;大纲面板;`Ctrl/Cmd+S/F/B/I/E`、
+  `Ctrl+1…6/0`、表格内 Tab 跳单元格。
+- **拖放语义**:从左栏拖笔记 → **落进正文 = 插入 `[[标题]]`**(不开标签)、**落到标签栏 = 新开标签**;
+  拖到编辑区左右边缘带 = 落到对应分栏。
+- **标签与分屏**:每栏自己的 `＋`;跨栏拖动、栏内按中线重排、空栏自动收;`Ctrl/Cmd+PageUp/Down`
+  切栏(**+Shift** 把当前标签搬到另一栏);撤销按钮**先**回退"同一标签内的跳转历史"(点 `[[链接]]`
+  跳走后,撤销回上一篇),没有再走文档撤销。
+- **侧栏**:笔记树(右键菜单、拖拽)+ 纳入管理面板(最近 / 文件夹 / 已忽略 + 扫描范围 + 批量)
+  + 回收站 + 大纲,四块共用一套 `ContextMenu` / panel 样式。
+- **缺 `notes/` 的工作区**:空态卡片 —— 「创建 notes/」或「改用已有目录(按工作区相对路径)」。
+- **窗口:** 侧栏 tab 的 chip 是「图标 + Notes」(`sidebar.right.pane.tab.title` 座位)。
 
 ## 位置决定(已实测,别再翻)
 
@@ -66,17 +111,36 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 
 | 路径 | 作用 |
 | --- | --- |
-| `lib/index.js` | Host 半:配置、索引、路由(`/dsh-notes/*`)、`knowledge` 工具 |
+| `lib/index.js` | Host 半:配置、索引装配、路由注册、`knowledge` 工具 |
+| `lib/service.js` | 工作区解析与切换、扫描(目录前沿续走)、三类分类、回收站、守卫式保存 |
+| `lib/registry.js` | 按工作区的薄索引(登记/忽略/忽略 glob/扫描根/最近使用) |
 | `lib/notes.js` | 纯函数:路径 / frontmatter / 标题(=文件名)/ glob 匹配 |
-| `lib/service.js` | 工作区解析与切换、扫描(目录前沿续走)、三类分类、回收站 |
+| `lib/routes.js` | 内容路由 `/dsh-notes/*`(全部接受 `workspaceKey`) |
+| `lib/tool.js` | `knowledge` 工具的两个 op 面 |
+| `lib/markdown-render.js` | **渲染决策层(纯函数)**,单测 `test/markdown-render.test.mjs` |
+| `lib/markdown-syntax.js` | 自定义行内语法(高亮 / 双链 / 公式)的 lezer 注册 |
+| `lib/outline.js` / `lib/section.js` | 大纲解析 / 章节搬移(纯函数,有单测) |
 | `lib/client.js` | **构建产物**,勿手改(`npm run build`) |
-| `src/client/` | 客户端源码:区域外壳、树、纳入管理面板、标签/分屏、编辑器、样式 |
-| `src/client/editor/tabs.ts` | 标签/分栏**纯模型**(打开/关闭/移栏/持久化),单测在 `test/tabs.test.mjs` |
+| `src/client/main.tsx` | 侧栏注册、错误边界、i18n(zh/en 两份字典要同步加键) |
+| `src/client/NotesPane.tsx` | 区域外壳:工作区切换、树、4s 轮询、布局(`tabs`)状态 |
+| `src/client/editor/tabs.ts` | 标签/分栏**纯模型**(打开/关闭/移栏/持久化),单测 `test/tabs.test.mjs` |
+| `src/client/EditorArea.tsx` / `TabStrip.tsx` | 分栏渲染、标签条、拖动换栏 |
+| `src/client/TreePane.tsx` | 笔记树(拖拽载荷:`x-dsh-note-id` / `x-dsh-note-title` / `text/plain` = `[[标题]]`) |
+| `src/client/CandidatesPanel.tsx` | 纳入管理面板(最近 / 文件夹 / 已忽略 + 扫描范围) |
+| `src/client/TrashPane.tsx` / `OutlinePane.tsx` / `QuickOpen.tsx` | 回收站 / 大纲 / 快速打开 |
+| `src/client/ContextMenu.tsx` | 共享右键菜单(分组 + 二级菜单 + 视口夹取) |
+| `src/client/editor/setup.ts` | CM6 装配:主题、键位、输入规则、点击命中、工具栏命令 |
+| `src/client/editor/decorate.ts` | 行内装饰 ViewPlugin(`safeBuild` 兜底) |
+| `src/client/editor/table.ts` | 块级 StateField(chip / 表格 / 代码卡 / 公式)+ `tableTab` |
+| `src/client/editor/selection.ts` | 选区包裹的纯逻辑(**必须用 `EditorSelection.range`**) |
+| `src/client/editor/table-model.ts` / `blocks.ts` / `reference.ts` | 纯模型:表格解析 / 块级插入规划 / 引用载荷 |
 | `src/client/editor/media.ts` | 媒体地址工具(单独成模块是为打断 `decorate ⇄ setup` 循环依赖) |
-| `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
+| `src/client/api.ts` | 客户端 → `/dsh-notes/*` 的薄封装 |
+| `src/client/styles.ts` | 全部 CSS(走主题 token:layer / border-l1-l2 / brand) |
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
+| `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
-| `test/` | `node --test` 单测 |
+| `test/` | `node --test` 单测(136 条) |
 
 ## 开发与验证
 
@@ -103,9 +167,21 @@ ln -s $DSH_HOME/profiles/<profile>/node_modules node_modules
 
 - 装/更新:用 `plugin_manager` 的 `install_bundle`(target = 本目录绝对路径),
   **不要**手写 profile 的 `package.json` / `cordis.patch.yml`,**不要**在 profile 里跑 pnpm。
-- 改了客户端 → 重新 `npm run build` 后 `web_restart` + 刷新页面;改了 Host 半 → `web_restart`。
+- **改了客户端** → `npm run build` 后**刷新页面**即可(客户端 bundle 由页面加载,**不需要**
+  `web_restart`);**改了 Host 半**(`lib/*.js` 里除决策层以外的部分)→ 必须 `web_restart`
+  再刷新。`lib/markdown-render.js` / `lib/markdown-syntax.js` 是**打包进 `lib/client.js`** 的,
+  按客户端处理。
 - 验完在 `cordis_inspect_query`(client `Slots`,root `sidebar.right.pane.tab`)里确认占用者含 `dsh-notes`;
   Host 侧看 `Config.listConfigs`(name=dsh-notes)的 `status` 必须是 `schema`,不是 `inactive`。
+
+**排错与取证(都实测过):**
+
+- 客户端崩溃/卡死时用**非压缩构建**拿真名栈:`DSH_NOTES_NO_MINIFY=1 npm run build`(随后务必
+  再跑一次普通 `npm run build` 还原)。
+- `createEditor()` 把 `EditorView` 挂在宿主元素上(`options.parent.__dshView`),浏览器里可直接
+  核对"文档 / 选区 / 装饰"而不必靠反复点击试探。
+- 只读决策层的行为用 Node 就能验(`test/markdown-render.test.mjs` 走真解析器),不要用截图当证据;
+  热路径上的改动先用靶子用例红→绿,再动浏览器。
 
 > **升级/重装依赖之后**:先在**工作区根**跑那四组补丁校验脚本(见根 `AGENTS.md`),
 > 再重启 web —— 否则本机六组补丁可能已丢失(尤其 A2 临时组,仅 0.2.0-rc.1 需要)。
