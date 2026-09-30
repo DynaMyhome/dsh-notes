@@ -102,6 +102,8 @@ class TableWidget extends WidgetType {
     // 点单元格 = **就地编辑**(预览模式下表格不翻回源码):该格换成 input,
     // Enter/失焦提交、Esc 取消,提交后写回源码对应区间(靠 from/to 精确定位)。
     const editCell = (cell: TableCell) => (event: Event) => {
+      const hit = event.target as HTMLElement | null
+      if (hit !== null && hit.closest('input, textarea') !== null) return
       event.preventDefault()
       const host = event.currentTarget as HTMLElement
       const input = document.createElement('input')
@@ -358,6 +360,9 @@ class CodeCardWidget extends WidgetType {
     pre.appendChild(codeEl)
     // 就地编辑:点正文 → 换成 textarea(提交后写回围栏内的正文区间)
     pre.addEventListener('mousedown', (event) => {
+      // 已经在编辑态(点在 textarea 里):交给原生选择,不要再重开输入框
+      const hit = event.target as HTMLElement | null
+      if (hit !== null && hit.closest('textarea, input') !== null) return
       event.preventDefault()
       const box = document.createElement('textarea')
       box.className = 'dsh-cm-code-input'
