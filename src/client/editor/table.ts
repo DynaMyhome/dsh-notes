@@ -148,8 +148,20 @@ class TableWidget extends WidgetType {
         openCellInputs.delete(input)
         host.style.color = previousColor
         if (save && value !== cell.text) {
-          // 有改动:dispatch 会让 StateField 重建 widget,DOM 自然还原
-          view.dispatch({ changes: { from: cell.from, to: cell.to, insert: value } })
+          // 有改动:dispatch 会让 StateField 重建 widget,DOM 自然还原。
+          // 偏移是**打开输入框那一刻**记下的:`cell.from/to` 期间可能已被别处的改动挪走,
+          // 越界的 change 会让 dispatch 抛错(而这里在 blur 处理器里,抛出去就没人接 ——
+          // 输入框会留在界面上接着吃按键)。先按当前文档长度夹一次。
+          const length = view.state.doc.length
+          const from = Math.max(0, Math.min(cell.from, length))
+          const to = Math.max(from, Math.min(cell.to, length))
+          try {
+            view.dispatch({ changes: { from, to, insert: value } })
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error('[dsh-notes] 单元格写回失败(已忽略):', error)
+            input.remove()
+          }
         } else {
           // 没改动(或取消):把输入框摘掉即可,底下的文本一直在
           input.remove()
@@ -480,10 +492,36 @@ class CodeCardWidget extends WidgetType {
   }
 }
 
+/**
+ * 热路径兜底:块级装饰构建抛错**不能把整次事务带崩**。
+ *
+ * 为什么必须兜:`tableBlocks` 是 StateField,它的 `update` 在**每一次文档变更/选区变更**
+ * 时同步调用,而 StateField 里抛出的异常会让这次 `view.dispatch` 整个失败 —— 状态与 DOM
+ * 就此不同步,表现就是"编辑器卡死,只能切到别的笔记再切回来(重建 EditorView)才恢复"。
+ * ViewPlugin 那条路已有 `safeBuild` 兜住,这里补齐。
+ * @param state - 编辑器状态。
+ * @param sourceMode - 这个编辑器是不是源码模式。
+ * @returns 装饰集;构建失败时返回空集(宁可少渲染,不可卡死)。
+ */
+function safeTableDecorations(state: EditorState, sourceMode: boolean): DecorationSet {
+  try {
+    return buildTableDecorations(state, sourceMode)
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('[dsh-notes] 块级装饰构建失败(本次跳过):', error)
+    return Decoration.none
+  }
+}
+
 export function tableBlocks(sourceMode: boolean = isSourceMode()): Extension {
   return StateField.define<DecorationSet>({
-    create: (state) => buildTableDecorations(state, sourceMode),
-    update: (value, transaction) => (transaction.docChanged || transaction.selection !== undefined ? buildTableDecorations(transaction.state) : value),
+    create: (state) => safeTableDecorations(state, sourceMode),
+    // sourceMode 必须一并转发:早先这里漏了,于是任何一次改动都会按**模块级**默认值重建,
+    // 两栏分屏时"源码栏被预览装饰覆盖"就是这么来的。
+    update: (value, transaction) =>
+      transaction.docChanged || transaction.selection !== undefined
+        ? safeTableDecorations(transaction.state, sourceMode)
+        : value,
     provide: (field) => EditorView.decorations.from(field),
   })
 }

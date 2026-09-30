@@ -13,6 +13,7 @@
  */
 
 import {
+  EditorSelection,
   EditorState,
   RangeSet,
   type Extension,
@@ -68,6 +69,7 @@ import { decorateFromTree } from './decorate'
 import { planBlockInsert } from './blocks'
 import { resolveImageUrl } from './media'
 import { tableBlocks, tableTab } from './table'
+import { wrapSelectionSpec } from './selection'
 
 /** 行内隐藏/标记装饰。 */
 const markStrong = Decoration.mark({ class: 'dsh-cm-strong' })
@@ -1174,7 +1176,14 @@ export function createEditor(options: {
       if (event.button === 0 && !event.shiftKey && event.detail === 1) {
         const precise = hitTestPosition(view, event.clientX, event.clientY)
         if (precise !== null && precise !== view.state.selection.main.head) {
-          view.dispatch({ selection: { anchor: precise } })
+          // 兜底:这里抛错会让 mousedown 处理中断,而且**焦点不会回到编辑器** ——
+          // 表现就是"点哪儿都不落光标、打字没反应"(只能重开笔记才恢复)。
+          try {
+            view.dispatch({ selection: { anchor: precise } })
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error('[dsh-notes] 点击定位修正失败(已忽略):', error)
+          }
         }
       }
       return
@@ -1186,7 +1195,13 @@ export function createEditor(options: {
     if (barY > 0 && event.clientY >= box.bottom - barY - 1) return
     const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false) ?? view.state.doc.length
     event.preventDefault()
-    view.dispatch({ selection: { anchor: fixDrift(view, event, position) } })
+    try {
+      view.dispatch({ selection: { anchor: fixDrift(view, event, position) } })
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('[dsh-notes] 空白处落光标失败(已忽略):', error)
+    }
+    // 焦点无论如何都要还给编辑器 —— 上面一旦抛错,不还焦点就是"打字没反应"。
     view.focus()
   }
 
@@ -1325,20 +1340,11 @@ export function setHeading(view: EditorView, level: number): void {
 
 /** 在选区两侧包一层标记(`**粗体**` 之类)。 */
 export function wrapSelection(view: EditorView, before: string, after = before): void {
-  const changes = view.state.changeByRange((range) => ({
-    changes: [
-      { from: range.from, insert: before },
-      { from: range.to, insert: after },
-    ],
-    range: EditorSelectionRange(range.from + before.length, range.to + before.length),
-  }))
-  view.dispatch(changes)
+  // 选区的构造见 editor/selection.ts:**必须是** EditorSelection.range(真 SelectionRange)。
+  // 早先这里返回 `{ anchor, head }` 普通对象,会把 state.selection 弄坏 —— 之后每一次
+  // 需要映射选区的编辑事务都抛 TypeError("设一次格式就卡死,只能切走笔记再切回")。
+  view.dispatch(wrapSelectionSpec(view.state, EditorSelection.range, before, after))
   view.focus()
-}
-
-/** 简化版选区构造(避免额外 import)。 */
-function EditorSelectionRange(anchor: number, head: number): { anchor: number; head: number } {
-  return { anchor, head } as never
 }
 
 /** 给当前行(或选中行)加前缀(`# `、`- `、`> ` 等);已有同样前缀则去掉。 */

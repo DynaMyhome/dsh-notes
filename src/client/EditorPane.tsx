@@ -314,11 +314,6 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     return () => window.clearTimeout(timer)
   }, [notice])
 
-  /**
-   * 执行一个工具栏命令。
-   *
-   * 顺手收起弹层:弹层与"直接生效"的命令是互斥的,留着它会挡住刚改过的正文。
-   */
   /** 写剪贴板并给一句提示(失败也要说清楚,别静默)。 */
   const copyText = useCallback(
     async (text: string) => {
@@ -332,12 +327,29 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     [t],
   )
 
-  const apply = useCallback((action: (handle: EditorHandle) => void) => {
-    setPopover(null)
-    const editor = editorRef.current
-    if (editor === null) return
-    action(editor)
-  }, [])
+  /**
+   * 执行一个工具栏命令。
+   *
+   * 顺手收起弹层:弹层与"直接生效"的命令是互斥的,留着它会挡住刚改过的正文。
+   * 命令里抛错必须**看得见**:以前是静默的,用户只会看到"编辑器没反应/像卡住了",
+   * 既没有提示也没有线索。
+   */
+  const apply = useCallback(
+    (action: (handle: EditorHandle) => void) => {
+      setPopover(null)
+      const editor = editorRef.current
+      if (editor === null) return
+      try {
+        action(editor)
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught)
+        setError(t('editor.commandFailed').replace('{message}', message))
+        // eslint-disable-next-line no-console
+        console.error('[dsh-notes] 编辑器命令失败:', caught)
+      }
+    },
+    [t],
+  )
 
   /** 当前选区文本(链接弹层的默认"文字");换行折成空格,免得整段被塞进链接)。 */
   const selectionText = useCallback((): string => {

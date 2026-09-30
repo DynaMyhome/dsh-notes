@@ -247,13 +247,20 @@ test('分隔线:预览时把 `---` 藏起来(只留那条线),光标落上去才
   assert.equal(only(onLine, HIDE).length, 0, '光标在分隔线上时不隐藏')
 })
 
-// TODO(未修完):表格紧跟的那一行拿不到行内装饰。这条用例**先跳过**,它是下一步的靶子:
-// 在 Node 里就能复现,不需要浏览器。当前 walk 的 Table 分支 return 掉子节点,而解析器的
-// Table 节点范围包含紧跟的那一行 —— 但补了"夹取后继续走子节点"仍未产出 wiki 装饰,
-// 说明该行的节点并非 Table 的子节点(或走了另一条分支),下轮据此继续定位。
-test('表格紧跟的那一行:行内链接必须照常装饰(解析器的 Table 节点吞了它)', { skip: true }, () => {
+/**
+ * **与运行时同一个解析器**。
+ *
+ * 教训:这条用例以前用裸 `markdownLanguage.parser.parse` —— 那个解析器**没有**我们的
+ * 自定义行内语法,`[[编辑器验收]]` 会被解析成普通的 `Link`(LinkMark),因此用例里永远
+ * 找不出 `wiki` 装饰,被误判成"walk 的锅"。运行时用的是
+ * `markdown({ base: markdownLanguage, extensions: [markdownSyntaxConfig()] })`
+ * (见 src/client/editor/setup.ts),测试必须同构。
+ */
+const parseFull = (text) => markdownLanguage.parser.configure(markdownSyntaxConfig()).parse(text)
+
+test('表格紧跟的那一行:行内链接必须照常装饰(解析器的 Table 节点吞了它)', () => {
   const text = '| 列一 | 列二 |\n| --- | --- |\n| 11 | 11 |\n[[编辑器验收]]\n端到端'
-  const tree = markdownLanguage.parser.parse(text)
+  const tree = parseFull(text)
   const lines = lineIndex(text)
   const wikiLine = lines.lineOf(text.indexOf('[[编辑器验收]]'))
   const descriptions = decideDecorations({
@@ -266,4 +273,30 @@ test('表格紧跟的那一行:行内链接必须照常装饰(解析器的 Table
   const wiki = descriptions.filter((item) => item.kind === MARK && item.cls === 'wiki')
   assert.equal(wiki.length, 1, '紧跟表格的那一行也要有一条 wiki 装饰')
   assert.equal(lines.lineOf(wiki[0].from), wikiLine, '装饰要落在那一行上')
+  // 标记符号 `[[` / `]]` 也要藏掉(否则链接下来会残留方括号)
+  const hidden = only(descriptions, HIDE).map((item) => text.slice(item.from, item.to))
+  assert.ok(hidden.includes('[[') && hidden.includes(']]'), '括号标记要隐藏')
+
+  // 行装饰:只有 表头 / 分隔 / 数据 三行算表格行,被解析器吞进来的两行不算
+  const tableLines = descriptions
+    .filter((item) => item.kind === LINE && String(item.cls).startsWith('table'))
+    .map((item) => lines.lineOf(item.from))
+  assert.deepEqual(tableLines, [1, 2, 3], '被吞的那两行不能被打上表格行样式')
+})
+
+test('表格紧跟的那一行:行内加粗/删除线同样照常装饰', () => {
+  const text = '| a | b |\n| --- | --- |\n| 1 | 2 |\n**粗** 与 ~~删~~'
+  const lines = lineIndex(text)
+  const descriptions = decideDecorations({
+    tree: parseFull(text),
+    text,
+    selection: [],
+    knownTitles: new Set(),
+    reveal: true,
+  })
+  const marks = descriptions.filter((item) => item.kind === MARK && item.cls !== undefined)
+  assert.deepEqual(
+    marks.map((item) => [item.cls, lines.lineOf(item.from)]),
+    [['strong', 4], ['strike', 4]],
+  )
 })
