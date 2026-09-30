@@ -40,8 +40,41 @@ export interface ContextMenuProps {
  */
 export function ContextMenu(props: ContextMenuProps): React.ReactElement {
   const ref = useRef<HTMLDivElement | null>(null)
+  /** 打开着的二级菜单(用来按视口夹取位置)。 */
+  const submenuRef = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState({ x: props.x, y: props.y })
   const [openSub, setOpenSub] = useState<string | null>(null)
+
+  /**
+   * 二级菜单必须留在屏幕内。
+   *
+   * 用户实测:菜单开在右下角时,`插入` 的子菜单会跑到屏幕**下方之外**,点都点不到。
+   * 规则:贴底就改成"底对齐父项"(往上长),贴右就翻到父项左边。
+   */
+  useEffect(() => {
+    if (openSub === null) return
+    const element = submenuRef.current
+    if (element === null) return
+    const rect = element.getBoundingClientRect()
+    if (rect.bottom > window.innerHeight - 6) {
+      element.style.top = 'auto'
+      element.style.bottom = '-6px'
+    } else {
+      element.style.top = '-6px'
+      element.style.bottom = 'auto'
+    }
+    if (rect.right > window.innerWidth - 6) {
+      element.style.left = 'auto'
+      element.style.right = '100%'
+      element.style.marginLeft = '0'
+      element.style.marginRight = '4px'
+    } else {
+      element.style.left = '100%'
+      element.style.right = 'auto'
+      element.style.marginLeft = '4px'
+      element.style.marginRight = '0'
+    }
+  }, [openSub])
 
   // 夹到视口内(靠近右下角打开时不要溢出)
   useEffect(() => {
@@ -101,7 +134,9 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
               {entry.children !== undefined ? <span className="dsh-notes-menu-arrow">›</span> : null}
             </button>
             {entry.children !== undefined && openSub === entry.id ? (
-              <div className="dsh-notes-submenu">{renderEntries(entry.children, depth + 1)}</div>
+              <div className="dsh-notes-submenu" ref={submenuRef}>
+                {renderEntries(entry.children, depth + 1)}
+              </div>
             ) : null}
           </div>
         ),
