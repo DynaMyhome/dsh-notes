@@ -200,8 +200,11 @@ export function buildTableDecorations(state: EditorState): DecorationSet {
         ranges.push(Decoration.replace({ widget: new TableWidget(model, node.from), block: true }).range(node.from, node.to))
         return
       }
-      // 代码围栏:渲染成卡片(顶栏 = 语言 + 复制按钮,正文 = 等宽代码)
+      // 代码围栏:渲染成卡片(顶栏 = 语言 + 复制按钮,正文 = 等宽代码);
+      // **光标进入这块时收起卡片、显示源码** —— 编辑交给编辑器本体(多行选择/中文输入法/
+      // 撤销/搜索全原生)。这是 Obsidian Live Preview 的做法,比在 widget 里嵌编辑器稳。
       if (node.name === 'FencedCode') {
+        if (selectionTouches(state, node.from, node.to)) return
         const source = state.doc.sliceString(node.from, node.to)
         ranges.push(Decoration.replace({ widget: new CodeCardWidget(source, node.from), block: true }).range(node.from, node.to))
       }
@@ -272,41 +275,8 @@ function paintCode(target: HTMLElement, code: string, language: string): void {
 
 
 /** 内层编辑器用的语言扩展(函数形式才是合法的 Extension)。 */
-const CODE_EXTENSIONS: Record<string, () => import('@codemirror/state').Extension> = {
-  js: () => javascript(),
-  javascript: () => javascript(),
-  mjs: () => javascript(),
-  cjs: () => javascript(),
-  jsx: () => javascript({ jsx: true }),
-  ts: () => javascript({ typescript: true }),
-  typescript: () => javascript({ typescript: true }),
-  tsx: () => javascript({ jsx: true, typescript: true }),
-  json: () => json(),
-  jsonc: () => json(),
-  py: () => python(),
-  python: () => python(),
-}
-
 /** 内层编辑器的高亮(颜色与卡片一致,走主题变量)。 */
-const INNER_HIGHLIGHT = HighlightStyle.define([
-  { tag: tokenTags.keyword, color: 'var(--dsw-alias-onboarding-accent)' },
-  { tag: tokenTags.string, color: 'var(--dsw-alias-state-success-primary)' },
-  { tag: [tokenTags.number, tokenTags.bool, tokenTags.null, tokenTags.atom], color: 'var(--dsw-alias-state-business-primary)' },
-  { tag: [tokenTags.comment, tokenTags.lineComment, tokenTags.blockComment], color: 'var(--dsw-alias-label-caption)', fontStyle: 'italic' },
-  { tag: [tokenTags.typeName, tokenTags.className, tokenTags.namespace], color: 'var(--dsw-alias-state-business-primary)' },
-  { tag: [tokenTags.function(tokenTags.variableName), tokenTags.labelName], color: 'var(--dsw-alias-label-primary)' },
-  { tag: tokenTags.invalid, color: 'var(--dsw-alias-state-error-primary)' },
-])
-
 /** 内层编辑器的外观:与卡片正文同观感(透明底、等宽、无额外内边距)。 */
-const INNER_THEME = EditorView.theme({
-  '&': { backgroundColor: 'transparent', fontSize: '0.9em' },
-  '.cm-content': { fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)', padding: '0', caretColor: 'var(--dsw-alias-label-primary)' },
-  '.cm-scroller': { fontFamily: 'inherit', lineHeight: '1.6', padding: '0', cursor: 'text' },
-  '.cm-gutters': { display: 'none' },
-  '&.cm-focused': { outline: 'none' },
-})
-
 /**
  * 代码块卡片:圆角 + 顶栏(语言名 / 复制按钮)+ 等宽正文。
  *
@@ -337,14 +307,8 @@ class CodeCardWidget extends WidgetType {
 
   toDOM(view: EditorView): HTMLElement {
     const { language, code } = this.parts()
-    const lines = this.source.split('\n')
-    const first = lines[0] ?? ''
-    const last = lines[lines.length - 1] ?? ''
+    const first = this.source.split('\n')[0] ?? ''
     const fence = /^\s*(```|~~~)/.exec(first)?.[1] ?? '```'
-    const bodyFrom = this.from + first.length + 1
-    const bodyTo = /^\s*(?:```|~~~)/.test(last)
-      ? this.from + this.source.length - last.length - 1
-      : this.from + this.source.length
 
     const card = document.createElement('div')
     card.className = 'dsh-cm-code-card'
@@ -360,6 +324,7 @@ class CodeCardWidget extends WidgetType {
     copy.textContent = '复制'
     copy.addEventListener('mousedown', (event) => {
       event.preventDefault()
+      event.stopPropagation()
       void navigator.clipboard?.writeText(code)
       copy.textContent = '已复制'
       window.setTimeout(() => {
@@ -369,6 +334,7 @@ class CodeCardWidget extends WidgetType {
     // 语言名就地改(写回围栏首行)
     label.addEventListener('mousedown', (event) => {
       event.preventDefault()
+      event.stopPropagation()
       const box = document.createElement('input')
       box.className = 'dsh-cm-code-lang-input'
       box.value = language
@@ -400,81 +366,19 @@ class CodeCardWidget extends WidgetType {
 
     const body = document.createElement('div')
     body.className = 'dsh-cm-code-body'
-    /** 静态渲染(高亮,不可编辑)。 */
-    const renderStatic = (): void => {
-      const pre = document.createElement('pre')
-      pre.className = 'dsh-cm-code-pre'
-      const codeEl = document.createElement('code')
-      paintCode(codeEl, code, language)
-      pre.appendChild(codeEl)
-      body.replaceChildren(pre)
-    }
-    renderStatic()
+    const pre = document.createElement('pre')
+    pre.className = 'dsh-cm-code-pre'
+    const codeEl = document.createElement('code')
+    paintCode(codeEl, code, language)
+    pre.appendChild(codeEl)
+    body.appendChild(pre)
 
-    // 编辑:挂一个**真正的 CodeMirror 实例**在卡片里(ProseMirror 官方 embedded-code-editor
-    // 与 Milkdown 都是这个做法)。这样多行选择、中文输入法、撤销、搜索全是原生的,
-    // 不再有 textarea 那堆毛病。
-    let inner: EditorView | null = null
-    const mountEditor = (): void => {
-      if (inner !== null) return
-      const languageExtension = CODE_EXTENSIONS[language.toLowerCase()]
-      inner = new EditorView({
-        state: EditorState.create({
-          doc: code,
-          extensions: [
-            ...(languageExtension === undefined ? [] : [languageExtension()]),
-            syntaxHighlighting(INNER_HIGHLIGHT),
-            history(),
-            keymap.of([...defaultKeymap, ...historyKeymap]),
-            EditorView.lineWrapping,
-            INNER_THEME,
-          ],
-        }),
-        parent: body,
-      })
-      inner.focus()
-      inner.dispatch({ selection: { anchor: inner.state.doc.length } })
-    }
-    /** 回写外层文档(只在失焦/显式提交时,**不能每次改动都回写**:那会重建 widget 把内层编辑器销毁)。 */
-    const commit = (save: boolean): void => {
-      if (inner === null) return
-      const next = inner.state.doc.toString()
-      const editor = inner
-      inner = null
-      editor.destroy()
-      if (save && next !== code) {
-        view.dispatch({ changes: { from: bodyFrom, to: bodyTo, insert: next } })
-      } else {
-        renderStatic()
-      }
-      view.focus()
-    }
+    // 点正文 → 光标进入这一块(围栏内),卡片随即收起、显示源码,由编辑器本体编辑
     body.addEventListener('mousedown', (event) => {
-      const hit = event.target as HTMLElement | null
-      if (hit !== null && hit.closest('.cm-editor') !== null) return
       event.preventDefault()
-      mountEditor()
-    })
-    body.addEventListener('keydown', (event) => {
-      // 内层编辑器自己处理按键;这里只接 Esc / Ctrl-Enter 提交
-      if (inner === null) return
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        event.stopPropagation()
-        commit(false)
-      } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault()
-        event.stopPropagation()
-        commit(true)
-      }
-    })
-    body.addEventListener('focusout', () => {
-      // 焦点离开卡片(且不是进到内层编辑器里的元素)才算失焦提交
-      window.setTimeout(() => {
-        if (inner === null) return
-        if (card.contains(document.activeElement)) return
-        commit(true)
-      }, 0)
+      const anchor = Math.min(this.from + 3, view.state.doc.length)
+      view.dispatch({ selection: { anchor } })
+      view.focus()
     })
 
     card.append(bar, body)
@@ -482,7 +386,7 @@ class CodeCardWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean {
-    // 卡片内部有真正的编辑器/输入框,不让外层 CM6 处理这些事件
+    // 卡片内部有输入框/复制按钮,不让外层 CM6 处理这些事件
     return true
   }
 }
