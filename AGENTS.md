@@ -52,7 +52,7 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | **决策层(纯函数)** | `lib/markdown-render.js` + `lib/markdown-syntax.js` | 输入「语法树 + 文本 + 选区 + knownTitles」,输出装饰**描述**(`line`/`hide`/`mark`/`widget`)。"该藏还是该露"的规则**只在这里**;`==高亮==`、`[[双链]]`、`$…$`、`$$…$$` 在 syntax 文件里注册成 lezer 真节点(不用正则二次扫描) |
 | **行内层(ViewPlugin)** | `src/client/editor/decorate.ts` | 把描述翻译成 CM6 装饰。插件层**不能跨行替换**,所以这里只做行级/行内;出错由 `safeBuild` 兜底(退回旧构建器 → 空集),绝不让装饰层带崩编辑器 |
 | **块级层(StateField)** | `src/client/editor/table.ts` | 跨行替换**只能**由 StateField 提供:元数据 chip、真 `<table>` widget(单元格就地编辑、表内右键插删行列)、代码卡、块级公式。它在**每次文档/选区变更**都重建 → 构建有 try/catch(`safeTableDecorations`),且按**每个编辑器**的 `sourceMode` 决定加不加装饰 |
-| **装配** | `src/client/editor/setup.ts` | `createEditor()` 组装主题/键位/输入规则/点击命中/工具栏命令;`livePreview(...)` 与 `tableBlocks(sourceMode)` 在这里挂上去。**两栏分屏时两者都必须按编辑器取模式**,读模块级单例会让"另一栏切源码 → 这栏装饰全丢" |
+| **装配** | `src/client/editor/setup.ts` | `createEditor()` 组装主题/键位/输入规则/点击命中/工具栏命令;`livePreview(documentPath, getKnownTitles, sourceMode, expandTitle)` 与 `tableBlocks(sourceMode, strings)` 在这里挂上去(widget 文案经 `strings` 一路传到 `table.ts`)。**两栏分屏时两者都必须按编辑器取模式**,读模块级单例会让"另一栏切源码 → 这栏装饰全丢" |
 
 **四条硬规则(都是踩过的坑,动热路径前先读):**
 
@@ -156,8 +156,10 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 
 ## 功能现状(已交付,别重复造)
 
-- **编辑器**:预览/源码**按栏独立**(表头按钮切换);工具栏 23 键(7 组 + 4 弹层:标题 / 链接 /
-  表格 / 公式);右键菜单 = 「引用此处」+ 文本格式 / 段落设置 / 插入(**表内**右键换成插删行列);
+- **编辑器**:预览/源码**按栏独立**(编辑器条**右侧固定簇**里的那个按钮切换,不参与工具栏滚动);
+  工具栏 **21 键**(6 组 + 4 弹层:标题 / 链接 / 表格 / 公式),另有 **2 个整篇动作**(预览/源码、保存)
+  固定在右侧 —— 它们以前排在工具栏末尾,默认侧栏宽度下会被挤出可视区;
+  右键菜单 = 「引用此处」+ 文本格式 / 段落设置 / 插入(**表内**右键换成插删行列);
   `[[` 补全(Tab 接受、不再多出 `]]`);图片粘贴/拖入;大纲面板;`Ctrl/Cmd+S/F/B/I/E`、
   `Ctrl+1…6/0`、表格内 Tab 跳单元格。
 - **拖放语义**:从左栏拖笔记 → **落进正文 = 插入 `[[标题]]`**(不开标签)、**落到标签栏 = 新开标签**;
@@ -220,12 +222,15 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | `src/client/CandidatesPanel.tsx` | 纳入管理面板(最近 / 文件夹 / 已忽略 + 扫描范围) |
 | `src/client/TrashPane.tsx` / `OutlinePane.tsx` / `QuickOpen.tsx` | 回收站 / 大纲 / 快速打开(`t` 由外壳注入,文案走字典) |
 | `src/client/ContextMenu.tsx` | 共享右键菜单(分组 + 二级菜单 + 视口夹取) |
-| `src/client/editor/setup.ts` | CM6 装配:主题、键位、输入规则、点击命中、工具栏命令 |
+| `src/client/editor/setup.ts` | CM6 装配:主题、键位、输入规则、点击命中、工具栏命令、**widget 文案(`strings` 转发)** |
 | `src/client/editor/decorate.ts` | 行内装饰 ViewPlugin(`safeBuild` 兜底) |
 | `src/client/editor/table.ts` | 块级 StateField(chip / 表格 / 代码卡 / 公式)+ `tableTab` |
 | `src/client/editor/selection.ts` | 选区包裹的纯逻辑(**必须用 `EditorSelection.range`**) |
 | `src/client/editor/table-model.ts` / `blocks.ts` / `reference.ts` | 纯模型:表格解析 / **表内插删行列(`applyTableAction`)** / 块级插入规划 / 引用载荷 |
 | `src/client/editor/media.ts` | 媒体地址工具(单独成模块是为打断 `decorate ⇄ setup` 循环依赖) |
+| `src/client/editor/frontmatter.ts` | frontmatter 范围解析 + 打开笔记时的初始光标(`initialAnchor`) |
+| `src/client/editor/mode.ts` | **源码模式的模块级开关**(装饰层缺省读它;分屏时按编辑器另传布尔值) |
+| `src/client/icons.tsx` | 全部内联 SVG 图标(统一外壳 + 缩放契约:尺寸走 `cssSize`,漏了就是"只有折叠箭头不变大") |
 | `src/client/api.ts` | 客户端 → `/dsh-notes/*` 的薄封装 |
 | `src/client/styles.ts` | 全部 CSS(走主题 token:layer / border-l1-l2 / brand) |
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
