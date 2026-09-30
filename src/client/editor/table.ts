@@ -278,9 +278,10 @@ function selectionTouches(state: EditorState, from: number, to: number): boolean
 }
 
 /** 构建所有块级表格装饰。 */
-export function buildTableDecorations(state: EditorState): DecorationSet {
-  // 源码模式:不加任何块级装饰
-  if (isSourceMode()) return Decoration.none
+export function buildTableDecorations(state: EditorState, sourceMode: boolean = isSourceMode()): DecorationSet {
+  // 源码模式:不加任何块级装饰(按**这个编辑器**的模式,不再读全局单例 —— 两栏分屏时
+  // 左边预览、右边源码是常态)
+  if (sourceMode) return Decoration.none
   const ranges = []
   // frontmatter(文档开头)→ 预览时收成一行「⋯ 元数据」chip。
   // 它是**整行替换**,必须由 StateField 提供(插件层不允许替换换行)。
@@ -524,9 +525,9 @@ class CodeCardWidget extends WidgetType {
   }
 }
 
-export function tableBlocks(): Extension {
+export function tableBlocks(sourceMode: boolean = isSourceMode()): Extension {
   return StateField.define<DecorationSet>({
-    create: (state) => buildTableDecorations(state),
+    create: (state) => buildTableDecorations(state, sourceMode),
     update: (value, transaction) => (transaction.docChanged || transaction.selection !== undefined ? buildTableDecorations(transaction.state) : value),
     provide: (field) => EditorView.decorations.from(field),
   })

@@ -40,6 +40,9 @@ export interface EditorAreaProps {
   activePane: 'p1' | 'p2'
   onFocusPane: (id: 'p1' | 'p2') => void
   onQuickOpen: () => void
+  /** 每栏的源码/预览模式(分屏时各管各的)。 */
+  sourceModeByPane: Record<'p1' | 'p2', boolean>
+  onToggleSourceMode: (id: 'p1' | 'p2') => void
 }
 
 /** 标签 → EditorPane 需要的 TreeNote(标签只存最小字段,别的用默认值补)。 */
@@ -159,6 +162,8 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
                 getKnownTitles={props.getKnownTitles}
                 outlineMove={props.outlineMove}
                 jumpTo={props.jumpTo}
+                sourceMode={props.sourceModeByPane[pane.id] === true}
+                onToggleSourceMode={() => props.onToggleSourceMode(pane.id)}
               />
             )}
           </div>
