@@ -114,18 +114,20 @@ class ImageWidget extends WidgetType {
     readonly alt: string,
     readonly from: number,
     readonly to: number,
+    /** 鼠标悬停提示('点击展开源码');由外壳按界面语言传入,默认英文兜底。 */
+    readonly expandTitle: string = 'Click to show source',
   ) {
     super()
   }
 
   eq(other: ImageWidget): boolean {
-    return other.url === this.url && other.alt === this.alt && other.from === this.from
+    return other.url === this.url && other.alt === this.alt && other.from === this.from && other.expandTitle === this.expandTitle
   }
 
   toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement('span')
     wrap.className = 'dsh-cm-image'
-    wrap.title = '点击展开源码'
+    wrap.title = this.expandTitle
     const img = document.createElement('img')
     img.src = this.url
     img.alt = this.alt
@@ -168,6 +170,8 @@ export function decorateFromTree(
   documentPath: string | null,
   getKnownTitles?: () => Set<string>,
   sourceMode: boolean = isSourceMode(),
+  /** widget 提示文案(图片/行内公式的 title);不传用英文兜底。 */
+  expandTitle?: string,
 ): DecorationSet {
   const state = view.state
   // 源码模式:一个装饰都不加(看到的就是磁盘上的纯 markdown);模式按**编辑器**传入
@@ -208,12 +212,16 @@ export function decorateFromTree(
         const checked = description.data?.checked === true
         ranges.push(Decoration.replace({ widget: new TaskWidget(checked, from, to) }).range(from, to))
       } else if (description.widget === 'math') {
-        ranges.push(Decoration.replace({ widget: new MathWidget(String(description.data?.tex ?? ''), from, to) }).range(from, to))
+        ranges.push(
+          Decoration.replace({ widget: new MathWidget(String(description.data?.tex ?? ''), from, to, expandTitle) }).range(from, to),
+        )
       } else if (description.widget === 'image') {
         const destination = String(description.data?.destination ?? '')
         const url = resolveImageUrl(documentPath, destination)
         if (url !== undefined) {
-          ranges.push(Decoration.replace({ widget: new ImageWidget(url, String(description.data?.alt ?? ''), from, to) }).range(from, to))
+          ranges.push(
+            Decoration.replace({ widget: new ImageWidget(url, String(description.data?.alt ?? ''), from, to, expandTitle) }).range(from, to),
+          )
         }
       }
     }
@@ -251,18 +259,20 @@ class MathWidget extends WidgetType {
     readonly tex: string,
     readonly from: number,
     readonly to: number,
+    /** 鼠标悬停提示('点击展开源码');由外壳按界面语言传入,默认英文兜底。 */
+    readonly expandTitle: string = 'Click to show source',
   ) {
     super()
   }
 
   eq(other: MathWidget): boolean {
-    return other.tex === this.tex && other.from === this.from
+    return other.tex === this.tex && other.from === this.from && other.expandTitle === this.expandTitle
   }
 
   toDOM(view: EditorView): HTMLElement {
     const span = document.createElement('span')
     span.className = 'dsh-cm-math'
-    span.title = '点击展开源码'
+    span.title = this.expandTitle
     try {
       span.innerHTML = temml.renderToString(this.tex, { throwOnError: false })
     } catch {

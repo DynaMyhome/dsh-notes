@@ -28,6 +28,35 @@ import temml from 'temml'
 const openCellInputs = new Set<HTMLInputElement>()
 
 /**
+ * CM6 widget 里的文案。
+ *
+ * widget 是命令式 DOM(`document.createElement`),拿不到 React 的 `t`。这些字以前**写死中文**
+ * 在这里 → 英文界面里冒出「复制」「⋯ 元数据」(用户审计发现)。现在由外壳按当前语言算一份
+ * 传进来(EditorPane 的 `widgetStrings` → `createEditor({ strings })`),缺省用英文兜底。
+ */
+export interface WidgetStrings {
+  /** 元数据 chip 上的字。 */
+  chipMeta: string
+  /** "点击展开源码"这类提示(title)。 */
+  chipExpand: string
+  /** 代码卡复制按钮。 */
+  codeCopy: string
+  /** 复制成功后的短暂文案。 */
+  codeCopied: string
+  /** 代码卡语言名的提示。 */
+  codeLang: string
+}
+
+/** 没有外壳注入时的兜底文案(英文;中文由字典提供)。 */
+export const DEFAULT_WIDGET_STRINGS: WidgetStrings = {
+  chipMeta: '⋯ Metadata',
+  chipExpand: 'Click to show source',
+  codeCopy: 'Copy',
+  codeCopied: 'Copied',
+  codeLang: 'Click to change language',
+}
+
+/**
  * 块级公式 widget(独占整行的 `$$…$$`,含多行写法)。
  *
  * 为什么必须在这里(StateField):插件层只允许**行内**替换,`$$` 跨行会被 CM6 拒绝
@@ -38,18 +67,19 @@ class BlockMathWidget extends WidgetType {
   constructor(
     readonly tex: string,
     readonly from: number,
+    readonly expandTitle: string = DEFAULT_WIDGET_STRINGS.chipExpand,
   ) {
     super()
   }
 
   eq(other: BlockMathWidget): boolean {
-    return other.tex === this.tex && other.from === this.from
+    return other.tex === this.tex && other.from === this.from && other.expandTitle === this.expandTitle
   }
 
   toDOM(view: EditorView): HTMLElement {
     const box = document.createElement('div')
     box.className = 'dsh-cm-math-block'
-    box.title = '点击展开源码'
+    box.title = this.expandTitle
     try {
       box.innerHTML = temml.renderToString(this.tex, { displayMode: true, throwOnError: false })
     } catch {
@@ -78,19 +108,23 @@ class BlockMathWidget extends WidgetType {
  * 点一下把光标送进 frontmatter,按既有 reveal 规则展开成源码再改。
  */
 class FrontmatterWidget extends WidgetType {
-  constructor(readonly summary: string) {
+  constructor(
+    readonly summary: string,
+    readonly strings: WidgetStrings = DEFAULT_WIDGET_STRINGS,
+  ) {
     super()
   }
 
   eq(other: FrontmatterWidget): boolean {
-    return other.summary === this.summary
+    // 文案也要比:换语言后必须重建 DOM,否则 chip 上留着旧语言(命令式 DOM 不会自己更新)
+    return other.summary === this.summary && other.strings.chipMeta === this.strings.chipMeta && other.strings.chipExpand === this.strings.chipExpand
   }
 
   toDOM(view: EditorView): HTMLElement {
     const box = document.createElement('div')
     box.className = 'dsh-cm-meta-chip'
-    box.textContent = '⋯ 元数据'
-    box.title = this.summary === '' ? '点击展开源码' : this.summary
+    box.textContent = this.strings.chipMeta
+    box.title = this.summary === '' ? this.strings.chipExpand : this.summary
     box.addEventListener('mousedown', (event) => {
       event.preventDefault()
       event.stopPropagation()
@@ -238,7 +272,11 @@ function selectionTouches(state: EditorState, from: number, to: number): boolean
 }
 
 /** 构建所有块级表格装饰。 */
-export function buildTableDecorations(state: EditorState, sourceMode: boolean = isSourceMode()): DecorationSet {
+export function buildTableDecorations(
+  state: EditorState,
+  sourceMode: boolean = isSourceMode(),
+  strings: WidgetStrings = DEFAULT_WIDGET_STRINGS,
+): DecorationSet {
   // 源码模式:不加任何块级装饰(按**这个编辑器**的模式,不再读全局单例 —— 两栏分屏时
   // 左边预览、右边源码是常态)
   if (sourceMode) return Decoration.none
@@ -254,7 +292,7 @@ export function buildTableDecorations(state: EditorState, sourceMode: boolean = 
       .map((line) => line.trim())
       .filter((line) => line !== '' && line !== '---')
       .join(' · ')
-    ranges.push(Decoration.replace({ widget: new FrontmatterWidget(summary), block: true }).range(0, metaEnd))
+    ranges.push(Decoration.replace({ widget: new FrontmatterWidget(summary, strings), block: true }).range(0, metaEnd))
   }
   const tree = ensureSyntaxTree(state, state.doc.length, 60)
   if (tree === null) return RangeSet.of(ranges, true)
@@ -273,7 +311,7 @@ export function buildTableDecorations(state: EditorState, sourceMode: boolean = 
         if (fromLineStart && toLineEnd && tex !== '') {
           if (!selectionTouches(state, first.from, last.to)) {
             ranges.push(
-              Decoration.replace({ widget: new BlockMathWidget(tex, first.from), block: true }).range(first.from, last.to),
+              Decoration.replace({ widget: new BlockMathWidget(tex, first.from, strings.chipExpand), block: true }).range(first.from, last.to),
             )
           }
           return false // 子节点不再处理
@@ -300,7 +338,7 @@ export function buildTableDecorations(state: EditorState, sourceMode: boolean = 
       if (node.name === 'FencedCode') {
         if (selectionTouches(state, node.from, node.to)) return
         const source = state.doc.sliceString(node.from, node.to)
-        ranges.push(Decoration.replace({ widget: new CodeCardWidget(source, node.from), block: true }).range(node.from, node.to))
+        ranges.push(Decoration.replace({ widget: new CodeCardWidget(source, node.from, strings), block: true }).range(node.from, node.to))
       }
     },
   })
@@ -381,6 +419,7 @@ class CodeCardWidget extends WidgetType {
   constructor(
     readonly source: string,
     readonly from: number,
+    readonly strings: WidgetStrings = DEFAULT_WIDGET_STRINGS,
   ) {
     super()
   }
@@ -396,7 +435,12 @@ class CodeCardWidget extends WidgetType {
   }
 
   eq(other: CodeCardWidget): boolean {
-    return other.source === this.source && other.from === this.from
+    return (
+      other.source === this.source &&
+      other.from === this.from &&
+      other.strings.codeCopy === this.strings.codeCopy &&
+      other.strings.codeLang === this.strings.codeLang
+    )
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -417,18 +461,18 @@ class CodeCardWidget extends WidgetType {
     const label = document.createElement('span')
     label.className = 'dsh-cm-code-lang-label'
     label.textContent = language === '' ? 'text' : language
-    label.title = '点击修改语言'
+    label.title = this.strings.codeLang
     const copy = document.createElement('button')
     copy.type = 'button'
     copy.className = 'dsh-cm-code-copy'
-    copy.textContent = '复制'
+    copy.textContent = this.strings.codeCopy
     copy.addEventListener('mousedown', (event) => {
       event.preventDefault()
       event.stopPropagation()
       void navigator.clipboard?.writeText(code)
-      copy.textContent = '已复制'
+      copy.textContent = this.strings.codeCopied
       window.setTimeout(() => {
-        copy.textContent = '复制'
+        copy.textContent = this.strings.codeCopy
       }, 1200)
     })
     // 语言名就地改(写回围栏首行)
@@ -501,11 +545,12 @@ class CodeCardWidget extends WidgetType {
  * ViewPlugin 那条路已有 `safeBuild` 兜住,这里补齐。
  * @param state - 编辑器状态。
  * @param sourceMode - 这个编辑器是不是源码模式。
+ * @param strings - widget 文案(跟随界面语言)。
  * @returns 装饰集;构建失败时返回空集(宁可少渲染,不可卡死)。
  */
-function safeTableDecorations(state: EditorState, sourceMode: boolean): DecorationSet {
+function safeTableDecorations(state: EditorState, sourceMode: boolean, strings: WidgetStrings): DecorationSet {
   try {
-    return buildTableDecorations(state, sourceMode)
+    return buildTableDecorations(state, sourceMode, strings)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('[dsh-notes] 块级装饰构建失败(本次跳过):', error)
@@ -513,14 +558,14 @@ function safeTableDecorations(state: EditorState, sourceMode: boolean): Decorati
   }
 }
 
-export function tableBlocks(sourceMode: boolean = isSourceMode()): Extension {
+export function tableBlocks(sourceMode: boolean = isSourceMode(), strings: WidgetStrings = DEFAULT_WIDGET_STRINGS): Extension {
   return StateField.define<DecorationSet>({
-    create: (state) => safeTableDecorations(state, sourceMode),
+    create: (state) => safeTableDecorations(state, sourceMode, strings),
     // sourceMode 必须一并转发:早先这里漏了,于是任何一次改动都会按**模块级**默认值重建,
     // 两栏分屏时"源码栏被预览装饰覆盖"就是这么来的。
     update: (value, transaction) =>
       transaction.docChanged || transaction.selection !== undefined
-        ? safeTableDecorations(transaction.state, sourceMode)
+        ? safeTableDecorations(transaction.state, sourceMode, strings)
         : value,
     provide: (field) => EditorView.decorations.from(field),
   })

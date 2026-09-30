@@ -58,3 +58,90 @@ test('表格后面紧跟的文段不能被吃成一行', () => {
   const withBlank = model.parseTable('| a |\n| --- |\n| 1 |\n\n后面的段落', 0)
   assert.equal(withBlank.rows.length, 1)
 })
+
+/* ------------------------------------------------------------------ */
+/* applyTableAction:表内右键「插/删行与列」                              */
+/* ------------------------------------------------------------------ */
+
+/** 表头 + 分隔行 + 三行数据。 */
+const BLOCK = ['| A | B | C |', '| --- | --- | --- |', '| 1 | 2 | 3 |', '| 4 | 5 | 6 |', '| 7 | 8 | 9 |'].join('\n')
+
+/** 改动前的行号算法(照抄 `EditorPane.tableAction`):把 row 当"表头=0"的源码行号。 */
+function legacyRowAction(kind, rowIndex) {
+  const lines = BLOCK.split('\n')
+  const body = lines.slice(2)
+  if (kind === 'rowDelete') {
+    if (rowIndex <= 0) return null // 表头不删
+    const rows = [...body]
+    rows.splice(rowIndex - 1, 1)
+    return [lines[0], lines[1], ...rows].join('\n')
+  }
+  const at = Math.max(0, rowIndex - 1) + (kind === 'rowBelow' ? 1 : 0)
+  const rows = [...body]
+  rows.splice(at, 0, '|    |    |    |')
+  return [lines[0], lines[1], ...rows].join('\n')
+}
+
+const dataRows = (block) => block.split('\n').slice(2)
+/** 空单元格行的格式是 `|   |   |`(buildRow 用 3 个空格占位),比较时压掉空格。 */
+const norm = (line) => String(line).replace(/\s+/g, ' ').trim()
+/** 整行都是空单元格(新插入的占位行)。 */
+const isBlank = (line) => {
+  const cells = String(line).replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|')
+  return cells.length > 0 && cells.every((cell) => cell.trim() === '')
+}
+
+maybe('applyTableAction:rowDelete 删的**就是右键那一行**(首行也能删)', () => {
+  const deleted = (row) => dataRows(model.applyTableAction({ block: BLOCK, row, col: 0, kind: 'rowDelete' }))
+  assert.deepEqual(deleted(0), ['| 4 | 5 | 6 |', '| 7 | 8 | 9 |'], '删第 1 个数据行')
+  assert.deepEqual(deleted(1), ['| 1 | 2 | 3 |', '| 7 | 8 | 9 |'], '删第 2 个数据行')
+  assert.deepEqual(deleted(2), ['| 1 | 2 | 3 |', '| 4 | 5 | 6 |'], '删最后一个数据行')
+  assert.equal(model.applyTableAction({ block: BLOCK, row: -1, col: 0, kind: 'rowDelete' }), null, '表头删不掉')
+  assert.equal(model.applyTableAction({ block: BLOCK, row: 3, col: 0, kind: 'rowDelete' }), null, '越界不动')
+})
+
+maybe('反向锁:改动前"删第 2 行"删掉的是第 1 行、"删第 1 行"是空操作', () => {
+  const legacyFirst = legacyRowAction('rowDelete', 0)
+  assert.equal(legacyFirst, null, '旧算法:第一个数据行的下标也是 0 → 被当成表头,空操作(实测过)')
+  const legacySecond = legacyRowAction('rowDelete', 1)
+  assert.deepEqual(dataRows(legacySecond), ['| 4 | 5 | 6 |', '| 7 | 8 | 9 |'], '旧算法:删的是第 1 行')
+  assert.notDeepEqual(dataRows(legacySecond), dataRows(model.applyTableAction({ block: BLOCK, row: 1, col: 0, kind: 'rowDelete' })))
+})
+
+maybe('applyTableAction:插行落在被点行的上/下', () => {
+  const above = (row) => dataRows(model.applyTableAction({ block: BLOCK, row, col: 0, kind: 'rowAbove' }))
+  const below = (row) => dataRows(model.applyTableAction({ block: BLOCK, row, col: 0, kind: 'rowBelow' }))
+  assert.equal(isBlank(above(0)[0]), true, '第 1 行上方插入 → 新行成为第一行')
+  assert.equal(above(0)[1], '| 1 | 2 | 3 |')
+  assert.equal(isBlank(above(1)[1]), true, '第 2 行上方插入 → 新行在第 2 位')
+  assert.equal(isBlank(above(2)[2]), true, '最后一行上方插入 → 新行在最后一行之前')
+  assert.equal(above(2)[3], '| 7 | 8 | 9 |', '原最后一行被挤到其后')
+  assert.equal(isBlank(below(0)[1]), true, '第 1 行下方插入 → 新行在第二行')
+  assert.equal(isBlank(below(2)[3]), true, '最后一行下方插入 → 追加到末尾')
+  assert.equal(below(2).length, 4)
+  // 表头(-1)上/下插都落到第一个数据行之前
+  assert.equal(isBlank(above(-1)[0]), true)
+  assert.equal(isBlank(below(-1)[0]), true)
+  assert.equal(model.applyTableAction({ block: BLOCK, row: 9, col: 0, kind: 'rowAbove' }), null, '越界不动')
+})
+
+maybe('applyTableAction:列操作(含表头行)与越界', () => {
+  const lines = (block) => block.split('\n')
+  const left = model.applyTableAction({ block: BLOCK, row: 0, col: 1, kind: 'colLeft' })
+  assert.equal(norm(lines(left)[0]), '| A | | B | C |', '在第 2 列左侧插一列')
+  assert.equal(norm(lines(left)[1]), '| --- | --- | --- | --- |', '分隔行同步插 ---')
+  const right = model.applyTableAction({ block: BLOCK, row: 0, col: 2, kind: 'colRight' })
+  assert.equal(norm(lines(right)[0]), '| A | B | C | |', '在最右列右侧插一列')
+  const del = model.applyTableAction({ block: BLOCK, row: 0, col: 0, kind: 'colDelete' })
+  assert.equal(lines(del)[0], '| B | C |')
+  assert.equal(lines(del)[2], '| 2 | 3 |', '数据行同步删列')
+  assert.equal(model.applyTableAction({ block: BLOCK, row: 0, col: 3, kind: 'colDelete' }), null, '列越界不动')
+  const single = '| A |\n| --- |\n| 1 |'
+  assert.equal(model.applyTableAction({ block: single, row: 0, col: 0, kind: 'colDelete' }), null, '只剩一列不删')
+})
+
+maybe('applyTableAction:块不成表 / 结果无变化 → null(调用方不该写文档)', () => {
+  assert.equal(model.applyTableAction({ block: '| A |', row: 0, col: 0, kind: 'rowDelete' }), null, '只有一行')
+  assert.equal(model.applyTableAction({ block: '', row: 0, col: 0, kind: 'rowAbove' }), null)
+  assert.equal(model.applyTableAction({ block: BLOCK, row: 0, col: 0, kind: 'colDelete', }), model.applyTableAction({ block: BLOCK, row: 1, col: 0, kind: 'colDelete' }))
+})

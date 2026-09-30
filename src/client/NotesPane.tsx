@@ -153,8 +153,14 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
    * 抢跑一次不但白跑,还可能取到别的工作区的树。所以首次取树等这个闸门。
    */
   const [wsReady, setWsReady] = useState(false)
-  /** 新建笔记后等树刷新再打开它(创建响应只有 id,没有 path/title)。 */
-  const [pendingOpen, setPendingOpen] = useState<string | null>(null)
+  /**
+   * 新建笔记后等树刷新再打开它(创建响应只有 id,没有 path/title)。
+   *
+   * 用 **ref 而不是 state**:写它的地方(`startCreate` 的回调)与读它的地方(`refresh`)
+   * 在同一条异步链上 —— `await call('create')` → 回调 → `await refresh()`,中间**不会**
+   * 经过一次渲染,state 那时还没生效(旧代码读的就是这个初值 null,于是"＋ 建了笔记但不打开")。
+   */
+  const pendingOpenRef = useRef<string | null>(null)
   /** 笔记区的字号/图标微调系数(0.85–1.5;见 src/client/scale.ts)。 */
   const [scale, setScale] = useState<number>(() => readScale())
   /** 让**已挂载**的编辑器重量一次尺寸的信号:切回可见、或改了字号时 +1。 */
@@ -388,7 +394,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       if (kind === 'note') {
         run('create', { title: t('status.untitled'), collectionId: selected?.collectionId ?? null }, (note?: { id?: string }) => {
           if (typeof note?.id === 'string') {
-            setPendingOpen(note.id)
+            pendingOpenRef.current = note.id
             setRenamingKey(`n:${note.id}`)
           }
         })
@@ -435,11 +441,12 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         setTree(next)
         setError(null)
         syncLayout(next)
-        if (pendingOpen !== null) {
-          const created = next.notes.find((note) => note.id === pendingOpen)
+        const pending = pendingOpenRef.current
+        if (pending !== null) {
+          const created = next.notes.find((note) => note.id === pending)
           if (created !== undefined) {
+            pendingOpenRef.current = null
             openNote(created, 'reuse')
-            setPendingOpen(null)
           }
         }
         return next
@@ -450,7 +457,11 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         if (!force) setLoading(false)
       }
     },
-    [sessionId],
+    // 依赖必须**写全**:早先只写 `[sessionId]`,于是 `refresh` 里调的 `syncLayout` 是
+    // "layoutReady 还是 false"那一帧的旧闭包(它每次都直接 `return current`)→ 改名后
+    // 标签标题/路径永不更新、自动保存打到不存在的文件(实测 Host 报 NOT_FOUND)。
+    // 轮询/可见性/focus 那些监听仍然走 `refreshRef.current`,所以重建回调不会重建定时器。
+    [openNote, sessionId, syncLayout],
   )
 
   /** 把扫描报告拼成一句人话 —— 「重新扫描」按钮到底干了什么,回显给用户。 */
@@ -767,18 +778,13 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       }
       // 没有(或失效的)上次选择 → 用**会话自己的工作区**,并且始终落到"真实键"上:
       // 挂载瞬间标签会先存在 `session` 键下(那时还不知道工作区),这里把它迁过去。
+      // (失效的键就这样被覆盖掉,不需要单独清理 —— 以前那段 `else if (saved !== null)`
+      //  永远不可达,因为上一行已经保证 `saved !== null` 才进得来。)
       if (saved === null || !result.workspaces.some((item) => item.key === saved)) saved = result.current
       if (saved !== null) {
         migrateLayout('session', saved)
         setActiveWorkspace(saved)
         setWorkspaceKey(saved)
-      } else if (saved !== null) {
-        // 上次的工作区已经不在索引里了 → 清掉,别让界面卡在一个不存在的地方
-        try {
-          window.localStorage.removeItem(`dsh-notes:ws:${sessionId}`)
-        } catch {
-          /* 同上 */
-        }
       }
       return result.workspaces
     } catch (caught) {
@@ -1218,6 +1224,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     >
       {quickOpen ? (
         <QuickOpen
+          t={t}
           notes={tree?.notes ?? []}
           onPick={(note) => {
             // 从哪一栏的 ＋ 点的就开在那一栏,而且是**新建标签**(以前是替换当前标签)

@@ -286,6 +286,49 @@ export async function saveNote(
   return call('save', { sessionId, path, text, expectedVersion })
 }
 
+/**
+ * **尽力落盘**(关标签页 / 刷新 / 切到后台时用)。
+ *
+ * 与 {@link saveNote} 同一条路由、同一份 payload(含当前的 `workspaceKey`),但走
+ * `navigator.sendBeacon`:那两个时机里普通 async fetch 可能被浏览器直接掐掉,beacon 不会。
+ * 拿不到 beacon 就退回 `fetch(keepalive)`。响应与守卫失败都只能算了 —— 这是"最后一搏",
+ * 真正的保证来自自动保存与卸载前的 flush。
+ * @param sessionId - 会话 id。
+ * @param path - 笔记路径(绝对)。
+ * @param text - 当前编辑器内容。
+ * @param expectedVersion - 打开时拿到的版本号(守卫式保存仍然生效)。
+ * @returns 是否**发出**了请求(不代表 Host 接受)。
+ */
+export function saveNoteBeacon(sessionId: string, path: string, text: string, expectedVersion: string): boolean {
+  const body = JSON.stringify({
+    ...(activeWorkspaceKey === null ? {} : { workspaceKey: activeWorkspaceKey }),
+    sessionId,
+    path,
+    text,
+    expectedVersion,
+  })
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      const blob = new Blob([body], { type: 'application/json' })
+      if (navigator.sendBeacon(`${PREFIX}/save`, blob)) return true
+    }
+  } catch {
+    /* 落回 fetch */
+  }
+  try {
+    void fetch(`${PREFIX}/save`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body,
+      keepalive: true,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** 重命名笔记(显式动作;Host 只做同目录 rename,目标存在则拒绝)。 */
 export async function renameNote(
   sessionId: string,

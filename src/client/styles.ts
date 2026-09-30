@@ -89,6 +89,13 @@ export const CSS = [
   '.dsh-notes-error-text{flex:1 1 auto;min-width:0}',
   `.dsh-notes-error-close{flex:0 0 auto;appearance:none;border:none;background:transparent;color:inherit;font:inherit;font-size:${sc(13)};line-height:1;padding:0 4px;cursor:pointer;opacity:.7}`,
   '.dsh-notes-error-close:hover{opacity:1}',
+  /* 浮层材质(用户审计:模态面板只有 60% 不透明,背后正文穿透可读)。
+     本主题(open-sea-skin)把所有 `--dsw-alias-bg-*` 都做成了半透明,所以**不能**只拿
+     `bg-base` 当浮层底色;宿主自己的菜单/对话框用的是 `--dsw-specific-menu` +
+     `backdrop-filter: var(--dsw-menu-backdrop-filter)`(本机实测 `blur(40px) saturate(150%)`)。
+     这里照抄同一套:跟随主题 token(不写死颜色)且背后内容变成不可读的模糊。
+     浮层尺寸与 `position:fixed` 的 JS 坐标仍是 px,不受影响。 */
+  '.dsh-notes-panel,.dsh-notes-context,.dsh-notes-submenu,.dsh-notes-wsmenu,.dsh-notes-popover,.dsh-notes-drop-chip,.dsh-notes-status{background:var(--dsw-specific-menu, var(--dsw-alias-bg-overlay));backdrop-filter:var(--dsw-menu-backdrop-filter, blur(24px) saturate(140%));-webkit-backdrop-filter:var(--dsw-menu-backdrop-filter, blur(24px) saturate(140%))}',
   /* 右键菜单 */
 
   /* 左列标签页(文件 / 大纲)+ 大纲 */
@@ -218,9 +225,16 @@ export const CSS = [
   '.dsh-notes-editor{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;overflow:auto}',
   '.dsh-notes-editor-pane{display:flex;flex-direction:column;height:100%;min-height:0;flex:1 1 auto}',
   `.dsh-notes-editor-bar{position:relative;display:flex;align-items:center;gap:4px;flex:0 0 auto;min-height:${sc(32)};padding:2px 8px;border-bottom:1px solid var(--dsw-alias-border-l1)}`,
-  `.dsh-notes-editor-name{font-size:${sc(13)};font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:45%}`,
-  /* 工具栏是**一行**命令:窄侧栏(约 700px)放不下时横向滚动,绝不换行把编辑区顶下去 */
-  '.dsh-notes-editor-tools{flex:0 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;flex-wrap:nowrap;scrollbar-width:thin}',
+  /* 标题:先保它自己(`flex:0 0 auto` + 38% 上限),**让工具栏去收缩/滚动** ——
+     否则弹性收缩按 basis 分摊,标题会被压成只剩 30px 的「UI …」(实测)。
+     完整标题在 `title` 里悬停可见。 */
+  `.dsh-notes-editor-name{flex:0 0 auto;min-width:0;font-size:${sc(13)};font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:38%}`,
+  /* 工具栏是**一行**命令:窄侧栏(约 700px)放不下时横向滚动,绝不换行把编辑区顶下去。
+     `flex:1 1 auto` 让它吃掉剩余宽度(配合上面的标题不收缩)。 */
+  '.dsh-notes-editor-tools{flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;flex-wrap:nowrap;scrollbar-width:thin;padding-right:2px}',
+  /* 整篇动作(预览/源码 + 保存):固定在右侧,**不参与横向滚动**。
+     以前它们排在工具栏末尾,默认侧栏宽度下被挤出可视区(用户审计:工具栏 662/334)。 */
+  '.dsh-notes-editor-actions{flex:0 0 auto;display:flex;align-items:center;gap:2px;margin-left:2px}',
   '.dsh-notes-editor-tools::-webkit-scrollbar{height:6px}',
   '.dsh-notes-editor-tools::-webkit-scrollbar-thumb{background:var(--dsw-alias-border-l2);border-radius:3px}',
   `.dsh-notes-editor-tools .dsh-notes-btn{min-width:${sc(24)};min-height:${sc(24)};padding:2px 4px;display:inline-flex;align-items:center;justify-content:center;gap:1px}`,
