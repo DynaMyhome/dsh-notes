@@ -909,6 +909,10 @@ const theme = EditorView.theme({
     // 给绝对定位的编辑输入框当定位参照(见 .dsh-cm-table-input)
     position: 'relative',
     border: '1px solid var(--dsw-alias-border-l1)',
+    // 单元格里是绝对定位的输入框、正文被 widget 隐藏,所以**内容为空时高度会塌**;
+    // 给一个最小高度,空行也保持正常的一行间距(用户实测:空行缩得特别小)。
+    minHeight: '26px',
+    height: '26px',
     padding: '6px 12px',
     textAlign: 'left',
     verticalAlign: 'top',
@@ -1043,6 +1047,17 @@ export function createEditor(options: {
           let match: RegExpExecArray | null
           while ((match = re.exec(line.text)) !== null) {
             if (offset >= match.index && offset <= match.index + match[0].length) {
+              // **判定范围就是这几个字**:`posAtCoords` 会把"点在行右侧空白"夹到行末,
+              // 于是行末的 `[[链接]]` 也被点中(用户实测"点旁边也会跳")。
+              // 这里再用字形坐标复核一次:指针必须落在这段链接的左右边界之内。
+              try {
+                const start = view.coordsAtPos(line.from + match.index)
+                const end = view.coordsAtPos(line.from + match.index + match[0].length)
+                if (event.clientX < start.left - 2 || event.clientX > end.right + 2) return false
+                if (event.clientY < start.top - 4 || event.clientY > end.bottom + 4) return false
+              } catch {
+                return false
+              }
               event.preventDefault()
               options.onWikiLink(match[1].trim())
               return true

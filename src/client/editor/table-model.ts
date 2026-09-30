@@ -51,8 +51,15 @@ export function parseTable(source: string, base: number): TableModel {
   for (const line of source.split(/\r?\n/)) {
     const lineStart = base + offset
     offset += line.length + 1 // +1 = 换行
-    if (line.trim() === '') continue
+    if (line.trim() === '') {
+      // 空行 = 表格结束
+      if (seenHeader) break
+      continue
+    }
     if (isDelimiterRow(line)) continue
+    // **表格行必须含 `|`**。以前不判,于是"表格后面紧跟的文段"被当成一行吃掉
+    // (用户实测:表格下直接写 `端到端`,它变成了表格里的一个格子)。
+    if (!line.includes('|')) break
     // 逐个单元格算出绝对范围:按 `|` 切,并把相对位置加回 base
     const cells: TableCell[] = []
     let cursor = 0
