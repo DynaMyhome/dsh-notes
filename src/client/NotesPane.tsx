@@ -190,6 +190,9 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       : null
 
   /** 打开一篇笔记:`reuse` 替换当前标签 / `tab` 新标签 / `split` 进第 2 栏。 */
+  /** 每个标签的"跳转历史"(tabKey → 走过的 noteId):撤销用它回到上一个笔记。 */
+  const tabHistory = useRef<Record<string, string[]>>({})
+
   const openNote = useCallback(
     (note: TreeNote, mode: 'reuse' | 'tab' | 'split' = 'reuse', ref?: TreeRef, pane?: 'p1' | 'p2') => {
       const tab: NoteTab = {
@@ -202,6 +205,16 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         ...(ref === undefined ? {} : { ref: true as const }),
       }
       const targetPane = pane ?? (mode === 'split' ? 'p2' : activePane)
+      // 同一个标签换到**另一篇笔记**(点 `[[链接]]` 跳转等)→ 记住从哪来:
+      // 新那篇什么都没编辑,撤销就该回到上一篇。
+      if (mode === 'reuse' && ref === undefined) {
+        const current = layoutRef.current.panes.find((item) => item.id === targetPane)
+        const open = current?.tabs.find((item) => item.key === current.active)
+        if (open !== undefined && open.noteId !== note.id) {
+          const stack = tabHistory.current[open.key] ?? []
+          tabHistory.current[open.key] = [...stack, open.noteId]
+        }
+      }
       setLayoutState((current) => {
         // 同栏已经开着这篇 → 激活它,不再开一个重复标签(＋ 点两下不该出两个一样的)
         const opened = current.panes.find((item) => item.id === targetPane)?.tabs.find((item) => item.key === tab.key)
@@ -1004,18 +1017,10 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
    * 点 `[[双链]]`:对得上就打开;**对不上什么都不创建**,只给一句提示
    * (用户明确要求:未命中不要自动新建笔记)。
    */
-  /** 每个标签的"跳转历史"(tabKey → 走过的 noteId):撤销用它回到上一个笔记。 */
-  const tabHistory = useRef<Record<string, string[]>>({})
-
   const onWikiLink = useCallback(
     (title: string) => {
       const existing = tree?.notes.find((note) => note.title === title)
       if (existing !== undefined) {
-        // 记住"从哪来":新笔记什么都没编辑,撤销就该回到那一篇
-        if (activeTab !== null && activeTab.noteId !== existing.id) {
-          const stack = tabHistory.current[activeTab.key] ?? []
-          tabHistory.current[activeTab.key] = [...stack, activeTab.noteId]
-        }
         setSelected(existing)
           return
       }

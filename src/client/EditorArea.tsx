@@ -87,6 +87,22 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
   // 按标签收集大纲/光标:活动标签的那一份才送上去
   const [outlines, setOutlines] = useState<Record<string, OutlineItem[]>>({})
   const [cursors, setCursors] = useState<Record<string, number>>({})
+  /**
+   * 任何一次拖放结束都清掉高亮。
+   *
+   * 正文里的 drop 会 `stopPropagation`(为了不让 pane 层再开标签),于是 pane 的
+   * onDrop 收不到 → 那个 tint 类的背景色就**留在编辑区上**(用户实测"颜色变深了")。
+   */
+  useEffect(() => {
+    const clear = (): void => setDropHint(null)
+    window.addEventListener('drop', clear, true)
+    window.addEventListener('dragend', clear, true)
+    return () => {
+      window.removeEventListener('drop', clear, true)
+      window.removeEventListener('dragend', clear, true)
+    }
+  }, [])
+
   /** 拖放指示:插到哪一栏的第几个位置(null = 没有拖动经过)。 */
   const [dropHint, setDropHint] = useState<{ pane: 'p1' | 'p2'; index: number; edge?: 'left' | 'right' | null } | null>(
     null,
