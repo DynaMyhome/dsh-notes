@@ -13,6 +13,7 @@
 import React from 'react'
 
 import { NotesPane } from './NotesPane'
+import { IconNote } from './icons'
 import { CSS } from './styles'
 
 /** 本包名(= 模块加载器里的注册 id)。 */
@@ -435,13 +436,26 @@ export function apply(ctx: any): void {
             order: 40,
             title: () => t('tab.title'),
             description: () => t('tab.guide'),
+            icon: IconNote,
           },
         ],
       }),
     'dsh-notes: tab type',
   )
 
-  // 2) tab 面板体:键必须是 tab 定义里的 id。
+  // 2) 侧栏标签(chip)的内容:往 `sidebar.right.pane.tab.title` 注册,渲染「图标 + 标题」。
+  //    官方 tab 定义里**没有** icon 字段,chip 的文字/图标都由这个座位提供
+  //    (参考 @deepseek-ai/dsh-client-ui-schedule 的做法);座位按 session 作用域,
+  //    并注入 `useTabInfo` 让我们能拿到当前 tab 的标题。
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+        ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: ID, locale: NS }, NotesChipTitle as any),
+      ),
+    'dsh-notes: tab chip title',
+  )
+
+  // 3) tab 面板体:键必须是 tab 定义里的 id。
   //    外面再套一层错误边界:宿主插槽渲染失败时只会留一个空 div(实测踩到),
   //    空白面板极难排查;这里把错误直接画出来(平时正常渲染时零开销)。
   ctx.slots.inject('sidebar.right.pane.tab', () =>
@@ -458,6 +472,22 @@ export function apply(ctx: any): void {
 
 /** 只声明本插件真正读取的服务(硬依赖可选服务会在他处禁用该服务时拖垮整个 GUI)。 */
 export const inject = ['slots', 'locale', 'sidebarRightTabs']
+
+/**
+ * 侧栏标签(chip)的内容:一个音符图标 + 当前 tab 的标题。
+ *
+ * props 由座位注入:`useTabInfo()` 给出当前 tab 记录(标题在里面),`t` 是本地化函数。
+ * @param props - 座位注入的 props。
+ */
+function NotesChipTitle(props: { useTabInfo: () => { tab: { title: string } }; t: (key: string) => string }): React.ReactElement {
+  const { tab } = props.useTabInfo()
+  return (
+    <span className="dsh-notes-chip">
+      <IconNote size={16} />
+      <span>{tab?.title ?? props.t('tab.title')}</span>
+    </span>
+  )
+}
 
 /**
  * 面板 = NotesPane 外面套一层错误边界。

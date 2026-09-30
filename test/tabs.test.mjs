@@ -148,3 +148,35 @@ maybe('migrateLayout:只在目标还没有布局时迁移一次', () => {
   assert.equal(tabs.migrateLayout('archive', 'wsC', storage), false)
   assert.equal(tabs.migrateLayout('wsA', 'wsA', storage), false)
 })
+
+maybe('moveTab:栏内重排(按中线算出的 index)', () => {
+  let layout = tabs.emptyLayout()
+  layout = tabs.openTab(layout, note('a'), { mode: 'tab' })
+  layout = tabs.openTab(layout, note('b'), { mode: 'tab' })
+  layout = tabs.openTab(layout, note('c'), { mode: 'tab' })
+  // 把 c 拖到最前
+  const moved = tabs.moveTab(layout, 'ws:c', { pane: 'p1', index: 0 })
+  assert.deepEqual(moved.panes[0].tabs.map((tab) => tab.noteId), ['c', 'a', 'b'])
+  // 把 c 再拖到末尾(下标是"摘掉自己前"的 3 → 修正成 2)
+  const back = tabs.moveTab(moved, 'ws:c', { pane: 'p1', index: 3 })
+  assert.deepEqual(back.panes[0].tabs.map((tab) => tab.noteId), ['a', 'b', 'c'])
+})
+
+maybe('moveTab:跨栏 + 第 2 栏空了收掉 + 位置没变是空操作', () => {
+  let layout = tabs.openTab(tabs.emptyLayout(), note('a'), { mode: 'tab' })
+  layout = tabs.openTab(layout, note('b'), { mode: 'split' })
+  // a(第 1 栏)拖到第 2 栏最前
+  const merged = tabs.moveTab(layout, 'ws:a', { pane: 'p2', index: 0 })
+  assert.equal(merged.panes.length, 2)
+  assert.deepEqual(merged.panes[0].tabs.map((tab) => tab.noteId), [])
+  assert.deepEqual(merged.panes[1].tabs.map((tab) => tab.noteId), ['a', 'b'])
+  // 再把 a 拖回第 1 栏:a 走后第 2 栏还有 b,所以两栏都在
+  const back = tabs.moveTab(merged, 'ws:a', { pane: 'p1', index: 0 })
+  assert.deepEqual(back.panes[0].tabs.map((tab) => tab.noteId), ['a'])
+  // 只剩一个标签的第 2 栏被搬空 → 收掉
+  const collapsed = tabs.moveTab(back, 'ws:b', { pane: 'p1', index: 1 })
+  assert.equal(collapsed.panes.length, 1, '第 2 栏空了要收掉')
+  assert.deepEqual(collapsed.panes[0].tabs.map((tab) => tab.noteId), ['a', 'b'])
+  // 位置没变:原样返回(引用相同 → 不会触发写盘/重渲染)
+  assert.equal(tabs.moveTab(collapsed, 'ws:a', { pane: 'p1', index: 0 }), collapsed)
+})

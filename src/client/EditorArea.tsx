@@ -19,7 +19,7 @@ import {
   activateTab,
   closeSecondPane,
   closeTab,
-  moveTabToPane,
+  moveTab,
   type LayoutState,
   type NoteTab,
   type PaneState,
@@ -39,7 +39,7 @@ export interface EditorAreaProps {
   getKnownTitles: () => Set<string>
   activePane: 'p1' | 'p2'
   onFocusPane: (id: 'p1' | 'p2') => void
-  onQuickOpen: () => void
+  onQuickOpen: (pane: 'p1' | 'p2') => void
   /** 每栏的源码/预览模式(分屏时各管各的)。 */
   sourceModeByPane: Record<'p1' | 'p2', boolean>
   onToggleSourceMode: (id: 'p1' | 'p2') => void
@@ -71,6 +71,8 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
   // 按标签收集大纲/光标:活动标签的那一份才送上去
   const [outlines, setOutlines] = useState<Record<string, OutlineItem[]>>({})
   const [cursors, setCursors] = useState<Record<string, number>>({})
+  /** 拖放指示:插到哪一栏的第几个位置(null = 没有拖动经过)。 */
+  const [dropHint, setDropHint] = useState<{ pane: 'p1' | 'p2'; index: number } | null>(null)
 
   const activeKey = useMemo(() => {
     const pane = layout.panes.find((item) => item.id === activePane) ?? layout.panes[0]
@@ -114,9 +116,29 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
   const paneView = (pane: PaneState): React.ReactElement => (
     <section
       key={pane.id}
-      className={`dsh-notes-pane${pane.id === activePane ? ' dsh-notes-pane-on' : ''}`}
+      className={`dsh-notes-pane${pane.id === activePane ? ' dsh-notes-pane-on' : ''}${
+        dropHint?.pane === pane.id ? ' dsh-notes-pane-drop' : ''
+      }`}
       aria-label={pane.id}
-      onMouseDown={() => props.onFocusPane(pane.id)}
+      onMouseDownCapture={() => props.onFocusPane(pane.id)}
+      // 整栏(含编辑区)都是合法落点:拖到编辑区 = 并入本栏末尾(Obsidian 的"中央带 = 并入")
+      onDragOver={(event) => {
+        if ((event.target as HTMLElement | null)?.closest?.('.dsh-notes-tabstrip') !== null) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+        setDropHint({ pane: pane.id, index: pane.tabs.length })
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+        setDropHint(null)
+      }}
+      onDrop={(event) => {
+        if ((event.target as HTMLElement | null)?.closest?.('.dsh-notes-tabstrip') !== null) return
+        const key = event.dataTransfer.getData('text/x-dsh-note-tab')
+        event.preventDefault()
+        if (key !== '') props.onLayout(moveTab(layout, key, { pane: pane.id, index: pane.tabs.length }))
+        setDropHint(null)
+      }}
     >
       <TabStrip
         t={t}
@@ -132,10 +154,15 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
             panes: layout.panes.map((item) => (item.id === pane.id ? { ...item, tabs: item.tabs.filter((tab) => tab.key === key), active: key } : item)),
           })
         }
-        onMoveToOther={(key) => props.onLayout(moveTabToPane(layout, key, pane.id === 'p1' ? 'p2' : 'p1'))}
+        onMoveToOther={(key) => props.onLayout(moveTab(layout, key, { pane: pane.id === 'p1' ? 'p2' : 'p1' }))}
         onCloseSplit={() => props.onLayout(closeSecondPane(layout))}
-        onDropTab={(key, target) => props.onLayout(moveTabToPane(layout, key, target))}
-        onQuickOpen={props.onQuickOpen}
+        onDropTab={(key, target, index) => {
+          props.onLayout(moveTab(layout, key, { pane: target, index }))
+          setDropHint(null)
+        }}
+        onDropHint={setDropHint}
+        dropIndex={dropHint?.pane === pane.id ? dropHint.index : null}
+        onQuickOpen={() => props.onQuickOpen(pane.id)}
       />
       <div className="dsh-notes-pane-body">
         {pane.tabs.length === 0 ? <div className="dsh-notes-empty">{t('editor.noSelection')}</div> : null}

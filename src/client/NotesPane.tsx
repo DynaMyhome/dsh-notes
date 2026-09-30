@@ -155,7 +155,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
 
   /** 打开一篇笔记:`reuse` 替换当前标签 / `tab` 新标签 / `split` 进第 2 栏。 */
   const openNote = useCallback(
-    (note: TreeNote, mode: 'reuse' | 'tab' | 'split' = 'reuse', ref?: TreeRef) => {
+    (note: TreeNote, mode: 'reuse' | 'tab' | 'split' = 'reuse', ref?: TreeRef, pane?: 'p1' | 'p2') => {
       const tab: NoteTab = {
         key: tabKeyOf(layoutKey, note.id),
         workspaceKey: ref?.workspaceKey ?? layoutKey,
@@ -164,12 +164,13 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         title: note.title,
         ...(ref === undefined ? {} : { ref: true as const }),
       }
+      const targetPane = pane ?? (mode === 'split' ? 'p2' : activePane)
       setLayoutState((current) => {
-        const next = openTab(current, tab, { mode })
+        const next = openTab(current, tab, { mode, pane: targetPane })
         saveLayout(layoutKey, next)
         return next
       })
-      setActivePane(mode === 'split' ? 'p2' : activePane)
+      setActivePane(targetPane)
     },
     [activePane, layoutKey],
   )
@@ -243,6 +244,9 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [jump, setJump] = useState<{ line: number; nonce: number }>({ line: 1, nonce: 0 })
   /** 快速打开(Ctrl/Cmd+P、Ctrl/Cmd+K;仅当焦点在笔记区域内)。 */
   const [quickOpen, setQuickOpen] = useState(false)
+
+  /** 快速打开是从哪一栏点的(＋在每栏各有一个,笔记要开在那一栏)。 */
+  const [quickOpenPane, setQuickOpenPane] = useState<'p1' | 'p2'>('p1')
   /** 回收站面板与清单。 */
   const [trashOpen, setTrashOpen] = useState(false)
   /** 纳入管理面板:三类分类的扫描结果(候选/杂项/统计)。 */
@@ -1014,7 +1018,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         <QuickOpen
           notes={tree?.notes ?? []}
           onPick={(note) => {
-            setSelected(note)
+            // 从哪一栏的 ＋ 点的,就开在那一栏
+            openNote(note, 'reuse', undefined, quickOpenPane)
           }}
           onClose={() => setQuickOpen(false)}
         />
@@ -1303,7 +1308,10 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             getKnownTitles={knownTitles}
             activePane={activePane}
             onFocusPane={setActivePane}
-            onQuickOpen={() => setQuickOpen(true)}
+            onQuickOpen={(pane) => {
+              setQuickOpenPane(pane)
+              setQuickOpen(true)
+            }}
             sourceModeByPane={sourceModeByPane}
             onToggleSourceMode={(id) =>
               setSourceModeByPane((current) => {

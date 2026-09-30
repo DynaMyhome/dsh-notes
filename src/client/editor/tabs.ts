@@ -74,7 +74,7 @@ export function findTab(layout: LayoutState, key: string): { pane: PaneState; ta
 export function openTab(
   layout: LayoutState,
   tab: NoteTab,
-  { mode = 'reuse' as 'reuse' | 'tab' | 'split' } = {},
+  { mode = 'reuse' as 'reuse' | 'tab' | 'split', pane: targetPane = null as 'p1' | 'p2' | null } = {},
 ): LayoutState {
   const next = cloneLayout(layout)
   const existing = findTab(next, tab.key)
@@ -97,7 +97,7 @@ export function openTab(
     return next
   }
 
-  const pane = paneOf(next, next.activePane) ?? next.panes[0]
+  const pane = (targetPane === null ? paneOf(next, next.activePane) : paneOf(next, targetPane)) ?? next.panes[0]
   if (mode === 'tab') {
     if (pane.tabs.length >= MAX_TABS_PER_PANE) return next
     pane.tabs = [...pane.tabs, tab]
@@ -113,6 +113,7 @@ export function openTab(
     }
   }
   pane.active = tab.key
+  if (targetPane !== null) next.activePane = pane.id
   return next
 }
 
@@ -189,6 +190,60 @@ export function moveTabToPane(layout: LayoutState, key: string, target: 'p1' | '
     next.panes = next.panes.filter((pane) => pane.id === 'p1' || pane.tabs.length > 0)
     if (next.activePane === 'p2') next.activePane = 'p1'
   }
+  return next
+}
+
+/**
+ * 把一个标签搬到指定栏的指定位置(栏内重排 / 跨栏 / 落到空栏都走它)。
+ *
+ * 落点语义照 Obsidian:栏内按 tab **中线**决定插到它前面还是后面(调用方把
+ * `index` 算好传进来);目标栏不存在就建;源栏空了、且是第 2 栏就收掉。
+ * @param layout - 当前布局。
+ * @param key - 被拖动的标签 key。
+ * @param target - `pane` 目标栏;`index` 目标位置(省略 = 末尾)。
+ * @returns 新布局(原样返回表示这次拖动是空操作)。
+ */
+export function moveTab(
+  layout: LayoutState,
+  key: string,
+  { pane: targetPane, index = null }: { pane: 'p1' | 'p2'; index?: number | null },
+): LayoutState {
+  const next = cloneLayout(layout)
+  const found = findTab(next, key)
+  if (found === null) return layout
+
+  // 先摘出来(记下它原本在目标栏里的下标,便于算"是否真的移动了")
+  let sourceIndex = -1
+  for (const pane of next.panes) {
+    const index = pane.tabs.findIndex((tab) => tab.key === key)
+    if (index < 0) continue
+    if (pane.id === targetPane) sourceIndex = index
+    const tabs = pane.tabs.filter((tab) => tab.key !== key)
+    pane.tabs = tabs
+    if (pane.active === key) pane.active = tabs[0]?.key ?? null
+  }
+
+  const dest = targetPane === 'p2' ? ensureSecondPane(next) : (paneOf(next, 'p1') as PaneState)
+  if (dest === undefined) return layout
+  if (dest.tabs.length >= MAX_TABS_PER_PANE && sourceIndex < 0) return layout
+
+  // 目标下标:同一个栏里往后拖时,摘掉自己会让后面的元素前移一位
+  let at = index === null || index < 0 ? dest.tabs.length : index
+  if (sourceIndex >= 0 && at > sourceIndex) at -= 1
+  at = Math.max(0, Math.min(dest.tabs.length, at))
+  const tabs = [...dest.tabs.slice(0, at), found.tab, ...dest.tabs.slice(at)]
+  dest.tabs = tabs
+  dest.active = key
+  next.activePane = dest.id
+
+  // 源栏空了又是第 2 栏 → 收掉
+  const source = paneOf(next, found.pane.id)
+  if (source !== undefined && source.id === 'p2' && source.tabs.length === 0) {
+    next.panes = next.panes.filter((pane) => pane.id === 'p1' || pane.tabs.length > 0)
+    if (next.activePane === 'p2') next.activePane = 'p1'
+  }
+  // 位置没变、栏也没变 → 空操作(不写盘、不重渲染)
+  if (sourceIndex >= 0 && found.pane.id === targetPane && sourceIndex === at) return layout
   return next
 }
 
