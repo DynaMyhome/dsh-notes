@@ -10,10 +10,10 @@
  * 文件始终是纯 md:编辑器只改源码,渲染由 CM6 装饰层完成(见 editor/setup.ts)。
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { parseOutline } from '../../lib/outline.js'
-import { RouteError, readNote, saveNote, uploadAsset, type TreeNote } from './api'
+import { RouteError, readNote, saveNote, saveNoteBeacon, uploadAsset, type TreeNote } from './api'
 import {
   createEditor,
   historyRedo,
@@ -32,6 +32,8 @@ import {
   type EditorHandle,
 } from './editor/setup'
 import { initialAnchor } from './editor/frontmatter'
+import { applyTableAction, type TableActionKind } from './editor/table-model'
+import type { WidgetStrings } from './editor/table'
 import type { OutlineItem } from './OutlinePane'
 import { ContextMenu, type MenuEntry } from './ContextMenu'
 import { setSourceMode as applySourceMode } from './editor/mode'
@@ -142,10 +144,32 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     table?: { from: number; to: number; row: number; col: number }
   } | null>(null)
   const [docPath, setDocPath] = useState<string | null>(null)
+  /** 绝对路径的镜像:`attachEditor` 建于磁盘读取之后,只能从 ref 拿(见下)。 */
+  const docPathRef = useRef<string | null>(null)
   const [length, setLength] = useState(0)
   /** 源码模式(Typora 式:默认预览,标记全隐藏;要看/改源码时切过来)。 */
   const [localSourceMode, setLocalSourceMode] = useState(false)
   const sourceMode = props.sourceMode ?? localSourceMode
+  /**
+   * CM6 装饰层里的文案(代码卡的复制按钮、元数据 chip…)。
+   *
+   * widget 是命令式 DOM,以前把中文写死在 `table.ts` 里 → 英文界面里冒出「复制」「⋯ 元数据」。
+   * 这里按当前语言算一份,经 `createEditor({ strings })` 传下去。
+   */
+  const widgetStrings = useMemo<WidgetStrings>(
+    () => ({
+      chipMeta: t('editor.chipMeta'),
+      chipExpand: t('editor.chipExpand'),
+      codeCopy: t('editor.codeCopy'),
+      codeCopied: t('editor.codeCopied'),
+      codeLang: t('editor.codeLang'),
+    }),
+    [t],
+  )
+  const widgetStringsRef = useRef(widgetStrings)
+  useEffect(() => {
+    widgetStringsRef.current = widgetStrings
+  }, [widgetStrings])
   /** 当前打开的工具栏弹层(标题 / 链接 / 表格 / 公式)。 */
   const [popover, setPopover] = useState<ToolPopover>(null)
   /** 弹层左缘(相对编辑器条):开弹层时按按钮位置算一次,窄侧栏里夹回可见范围。 */
@@ -158,14 +182,20 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   /** 编辑器条(弹层的定位上下文 + 判断"点在外面"的边界)。 */
   const barRef = useRef<HTMLDivElement | null>(null)
 
-  /** 保存(守卫式)。 */
-  const save = useCallback(async (): Promise<void> => {
+  /**
+   * 保存(守卫式)。`text` 省略时取编辑器当前内容。
+   *
+   * 为什么要能**传入文本**:卸载(`unmount`)/关页面(`pagehide`)时要先把内容取出来再
+   * 销毁编辑器,不能等 `editorRef.current` 变空。
+   */
+  const saveText = useCallback(async (text?: string): Promise<void> => {
     const editor = editorRef.current
-    if (editor === null || !dirtyRef.current) return
-    const text = editor.getDoc()
+    if (!dirtyRef.current) return
+    const payload = text ?? editor?.getDoc()
+    if (payload === undefined) return
     setSaveState('saving')
     try {
-      const result = await saveNote(sessionId, note.path, text, versionRef.current)
+      const result = await saveNote(sessionId, note.path, payload, versionRef.current)
       versionRef.current = String(result.version)
       dirtyRef.current = false
       setSaveState('saved')
@@ -173,12 +203,23 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       // 身份标识被删/被改 → Host 已按索引写回:编辑区同步成磁盘内容,免得下一次
       // 自动保存又把它删掉(用户看不到的"来回打架")。
       if (result.restoredId === true && typeof result.text === 'string') {
-        editor.setDoc(result.text)
+        editorRef.current?.setDoc(result.text)
         dirtyRef.current = false
         setNotice(t('editor.idRestored'))
       }
     } catch (caught) {
       if (caught instanceof RouteError && caught.code === 'FS_STALE_VERSION') {
+        // **自愈**:磁盘上的内容 == 我们正要写的内容 → 那是**我们自己**刚写下去的
+        // (关页面时的 sendBeacon / 另一个标签页 / 上一次超时重试),只是版本号没对上。
+        // 这种情况只对齐版本、算保存成功 —— 不该弹"文件已被外部修改"吓用户
+        // (真正的**外部**改动内容必然不同,下面那条分支照旧走)。
+        if (caught.currentText !== undefined && caught.currentText === payload) {
+          versionRef.current = caught.currentVersion ?? versionRef.current
+          dirtyRef.current = false
+          setSaveState('saved')
+          setConflict(null)
+          return
+        }
         setConflict({ version: caught.currentVersion ?? '', text: caught.currentText ?? null })
         setSaveState('error')
         return
@@ -186,9 +227,92 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       setError(caught instanceof Error ? caught.message : String(caught))
       setSaveState('error')
     }
-  }, [note.path, sessionId])
+  }, [note.path, sessionId, t])
 
-  /** 载入笔记并挂上编辑器。 */
+  /** 保存当前编辑器内容。 */
+  const save = useCallback((): Promise<void> => saveText(), [saveText])
+
+  /**
+   * 把编辑器挂到宿主元素上(**载入**与**切模式**共用)。
+   *
+   * **不读磁盘**:文本由调用方给。切模式时必须传"当前文档",否则 800ms 自动保存窗口里
+   * 没落盘的编辑会被磁盘内容覆盖掉(实测:切一次「源码/预览」,刚打的字静默回退)。
+   * @param text - 要装进编辑器的 markdown。
+   * @param anchor - 初始光标位置。
+   * @param scrollTop - 保留的滚动位置(切模式用;载入时为 0)。
+   */
+  const attachEditor = useCallback(
+    (text: string, anchor: number, scrollTop = 0): void => {
+      const host = hostRef.current
+      if (host === null) return
+      editorRef.current?.destroy()
+      // 装饰插件与块级 StateField 都读这个模块级标志,所以换模式必须重建编辑器
+      applySourceMode(sourceMode)
+      editorRef.current = createEditor({
+        parent: host,
+        doc: text,
+        documentPath: docPathRef.current,
+        sourceMode,
+        strings: widgetStringsRef.current,
+        onChange: () => {
+          dirtyRef.current = true
+          setSaveState('dirty')
+          const current = editorRef.current?.getDoc() ?? ''
+          setLength(current.length)
+          outlineRef.current?.(parseOutline(current))
+          if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+          timerRef.current = window.setTimeout(() => {
+            void saveRef.current()
+          }, AUTOSAVE_MS)
+        },
+        onSelection: (line: number) => cursorRef.current?.(line),
+        // 粘贴/拖入的图片 → 上传到资产目录 → 在光标处插入 markdown 链接
+        onImageFile: (file: File) => {
+          void (async () => {
+            try {
+              const asset = await uploadAsset(sessionId, note.id, file.name, file)
+              const editor = editorRef.current
+              if (editor === null) return
+              const range = editor.view.state.selection.main
+              editor.view.dispatch({
+                changes: { from: range.from, to: range.to, insert: asset.markdown },
+                selection: { anchor: range.from + asset.markdown.length },
+              })
+              editor.focus()
+            } catch (caught) {
+              setError(caught instanceof Error ? caught.message : String(caught))
+            }
+          })()
+        },
+        onWikiLink: props.onWikiLink,
+        getKnownTitles: props.getKnownTitles,
+        onSave: () => {
+          if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+          void saveRef.current()
+        },
+      })
+      if (anchor > 0) editorRef.current?.view.dispatch({ selection: { anchor } })
+      if (scrollTop > 0) editorRef.current.view.scrollDOM.scrollTop = scrollTop
+    },
+    [note.id, props.getKnownTitles, props.onWikiLink, sessionId, sourceMode],
+  )
+
+  // 回调镜像:载入 effect 的依赖必须**只有**「换笔记 / 换会话」,它内部一律走 ref 取最新回调
+  const saveRef = useRef<(text?: string) => Promise<void>>(async () => {})
+  useEffect(() => {
+    saveRef.current = saveText
+  }, [saveText])
+  const attachRef = useRef<(text: string, anchor: number, scrollTop?: number) => void>(() => {})
+  useEffect(() => {
+    attachRef.current = attachEditor
+  }, [attachEditor])
+
+  /**
+   * 载入笔记并挂上编辑器。
+   *
+   * **依赖只有 `[note.path, sessionId]`**:把 `sourceMode` / 回调放进依赖,它们一变就会
+   * 重读磁盘并重建编辑器 —— 那正是"切模式丢字"的根因。切模式改走下面那条 effect(用当前文档)。
+   */
   useEffect(() => {
     let cancelled = false
     setStatus('loading')
@@ -202,59 +326,12 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
         const loaded = await readNote(sessionId, note.path)
         if (cancelled) return
         versionRef.current = String(loaded.version)
+        docPathRef.current = loaded.absolutePath
         setDocPath(loaded.absolutePath)
         setLength(loaded.text.length)
         outlineRef.current?.(parseOutline(loaded.text))
-        const host = hostRef.current
-        if (host === null) return
-        editorRef.current?.destroy()
-        // 切模式靠重建编辑器:装饰插件与块级 StateField 都读这个标志
-        applySourceMode(sourceMode)
-        editorRef.current = createEditor({
-          parent: host,
-          doc: loaded.text,
-          documentPath: loaded.absolutePath,
-          sourceMode,
-          onChange: () => {
-            dirtyRef.current = true
-            setSaveState('dirty')
-            const text = editorRef.current?.getDoc() ?? ''
-            setLength(text.length)
-            outlineRef.current?.(parseOutline(text))
-            if (timerRef.current !== null) window.clearTimeout(timerRef.current)
-            timerRef.current = window.setTimeout(() => {
-              void save()
-            }, AUTOSAVE_MS)
-          },
-          onSelection: (line: number) => cursorRef.current?.(line),
-          // 粘贴/拖入的图片 → 上传到资产目录 → 在光标处插入 markdown 链接
-          onImageFile: (file: File) => {
-            void (async () => {
-              try {
-                const asset = await uploadAsset(sessionId, note.id, file.name, file)
-                const editor = editorRef.current
-                if (editor === null) return
-                const range = editor.view.state.selection.main
-                editor.view.dispatch({
-                  changes: { from: range.from, to: range.to, insert: asset.markdown },
-                  selection: { anchor: range.from + asset.markdown.length },
-                })
-                editor.focus()
-              } catch (caught) {
-                setError(caught instanceof Error ? caught.message : String(caught))
-              }
-            })()
-          },
-          onWikiLink: props.onWikiLink,
-          getKnownTitles: props.getKnownTitles,
-          onSave: () => {
-            if (timerRef.current !== null) window.clearTimeout(timerRef.current)
-            void save()
-          },
-        })
         // 光标别停在 frontmatter 里(否则"光标进去就展开"会让每次打开都摊开元数据)
-        const anchor = initialAnchor(loaded.text)
-        if (anchor > 0) editorRef.current?.view.dispatch({ selection: { anchor } })
+        attachRef.current(loaded.text, initialAnchor(loaded.text))
         setStatus('ready')
       } catch (caught) {
         if (cancelled) return
@@ -265,13 +342,96 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
 
     return () => {
       cancelled = true
+      // **卸载前必须把没保存的编辑交出去**:旧实现只 clearTimeout + destroy,
+      // 800ms 自动保存窗口里的输入就这么没了(关标签 / 收分屏 / 切工作区实测)。
+      const editor = editorRef.current
+      const text = editor?.getDoc()
+      const dirty = dirtyRef.current
       if (timerRef.current !== null) window.clearTimeout(timerRef.current)
       timerRef.current = null
-      editorRef.current?.destroy()
       editorRef.current = null
+      editor?.destroy()
       outlineRef.current?.([])
+      if (dirty && text !== undefined) void saveRef.current(text)
     }
-  }, [note.path, save, sessionId, sourceMode])
+  }, [note.path, sessionId])
+
+  /**
+   * 切「预览/源码」:用**当前文档**重建编辑器。
+   *
+   * 重建是必须的(见 `attachEditor` 的注释),但**绝不能再读一次磁盘** ——
+   * 版本号与脏标记原样保留,所以刚打的字还在,800ms 后照样自动保存。
+   */
+  const modeRef = useRef(sourceMode)
+  useEffect(() => {
+    if (modeRef.current === sourceMode) return
+    modeRef.current = sourceMode
+    const editor = editorRef.current
+    if (editor === null) return
+    attachRef.current(editor.getDoc(), editor.view.state.selection.main.head, editor.view.scrollDOM.scrollTop)
+  }, [sourceMode])
+
+  /**
+   * 关页面 / 切到后台时的**尽力落盘**。
+   *
+   * 卸载 flush 只在组件真的被卸载时发生;关标签页、刷新、切到别的应用时只有
+   * `pagehide` / `visibilitychange` 会来,而这两个时机里 async fetch 可能被浏览器掐掉,
+   * 所以走 `navigator.sendBeacon`(见 `api.saveNoteBeacon`)。
+   *
+   * 副作用要自己收干净:beacon **拿不到响应**,编辑器手里的版本号因此会过期 ——
+   * 回到前台后第一次保存就会误报"文件已被外部修改"。所以这里记下发出去的内容,
+   * 并在 hidden → visible 时**静默对一次版本**(见下面那条 effect)。
+   */
+  const beaconTextRef = useRef<string | null>(null)
+  useEffect(() => {
+    const flush = (): void => {
+      if (!dirtyRef.current) return
+      const text = editorRef.current?.getDoc()
+      if (text === undefined) return
+      beaconTextRef.current = text
+      saveNoteBeacon(sessionId, note.path, text, versionRef.current)
+    }
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [note.path, sessionId])
+
+  /**
+   * 回到前台时把版本号对齐(只在隐藏期间发过 beacon 时才做)。
+   *
+   * 磁盘内容 == 我们 beacon 写下去的内容 → 那是自己的写入,只需 adopt 新版本
+   * (`dirty` 保持 true,后面继续保存);内容不同 → 不动,交给既有的冲突流程。
+   */
+  useEffect(() => {
+    const onVisible = (): void => {
+      if (document.visibilityState !== 'visible') return
+      const sent = beaconTextRef.current
+      if (sent === null) return
+      void (async () => {
+        try {
+          const loaded = await readNote(sessionId, note.path)
+          if (sent === loaded.text) {
+            versionRef.current = String(loaded.version)
+            beaconTextRef.current = null
+          }
+        } catch {
+          /* 读不到就留着,下次回到前台再试;真写不进去时会走冲突流程 */
+        }
+      })()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('pageshow', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('pageshow', onVisible)
+    }
+  }, [note.path, sessionId])
 
   /** 大纲点击 → 跳到该标题行。 */
   useEffect(() => {
@@ -512,52 +672,26 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   /**
    * 表格操作(右键表内):插/删行与列**直接改源码**那一块表。
    *
-   * 为什么按行字符串改而不是走 model:模型里没有"列"的整列偏移,而这一块表的
-   * 源码就是若干行 `| a | b |` —— 按行切最直观,也不会动到表格以外的内容。
+   * 块计算是 `table-model.ts` 的纯函数 `applyTableAction`(有单测),这里只负责取块、
+   * 派发、还焦点。**行号语义**:数据行 = `<tbody>` 内下标(0 = 第一个数据行),
+   * 表头 = **-1** —— 见 `TableActionTarget.row` 的注释(旧代码拿节点在父元素里的下标当
+   * 行号,`<thead>`/`<tbody>` 各自从 0 开始 → "删第一行"被当成删表头、"删第二行"删错行)。
+   * @param from - 表格块起点(文档位置)。
+   * @param to - 表格块终点。
+   * @param rowIndex - 见上(表头 = -1)。
+   * @param colIndex - 列下标(0 = 第一列,含表头行)。
+   * @param kind - 动作。
    */
   const tableAction = useCallback(
-    (from: number, to: number, rowIndex: number, colIndex: number, kind: 'rowAbove' | 'rowBelow' | 'colLeft' | 'colRight' | 'rowDelete' | 'colDelete') => {
+    (from: number, to: number, rowIndex: number, colIndex: number, kind: TableActionKind) => {
       const editor = editorRef.current
       if (editor === null) return
       const view = editor.view
       const block = view.state.sliceDoc(from, to)
-      const lines = block.split('\n')
-      if (lines.length < 2) return
-      const split = (line: string): string[] => line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((cell) => cell.trim())
-      const build = (cells: string[]): string => `| ${cells.map((cell) => cell || '   ').join(' | ')} |`
-      const header = split(lines[0])
-      const cols = header.length
-      const body = lines.slice(2)
-      const blank = Array.from({ length: cols }, () => '')
-      let next: string[] = lines
-      if (kind === 'rowAbove' || kind === 'rowBelow') {
-        const at = Math.max(0, rowIndex - 1) + (kind === 'rowBelow' ? 1 : 0)
-        const rows = [...body]
-        rows.splice(at, 0, build(blank))
-        next = [lines[0], lines[1], ...rows]
-      } else if (kind === 'rowDelete') {
-        if (rowIndex <= 0) return // 表头不删
-        const rows = [...body]
-        rows.splice(rowIndex - 1, 1)
-        next = [lines[0], lines[1], ...rows]
-      } else if (kind === 'colLeft' || kind === 'colRight') {
-        const at = colIndex + (kind === 'colRight' ? 1 : 0)
-        const add = (line: string, isDelim: boolean): string => {
-          const cells = split(line)
-          cells.splice(at, 0, isDelim ? '---' : '')
-          return build(cells)
-        }
-        next = [add(lines[0], false), add(lines[1], true), ...body.map((line) => add(line, false))]
-      } else if (kind === 'colDelete') {
-        if (cols <= 1) return
-        const drop = (line: string): string => {
-          const cells = split(line)
-          cells.splice(colIndex, 1)
-          return build(cells)
-        }
-        next = [drop(lines[0]), drop(lines[1]), ...body.map((line) => drop(line))]
-      }
-      view.dispatch({ changes: { from, to, insert: next.join('\n') } })
+      const next = applyTableAction({ block, row: rowIndex, col: colIndex, kind })
+      // null = 动不了(删表头 / 下标越界 / 块不成表):**不写文档**,也不改选区
+      if (next === null) return
+      view.dispatch({ changes: { from, to, insert: next } })
       view.focus()
       setMenu(null)
     },
@@ -709,26 +843,30 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
           <button type="button" className="dsh-notes-btn" title={t('editor.wikiLink')} aria-label={t('editor.wikiLink')} onClick={() => apply((e) => insertWikiLinkSnippet(e.view))}>
             <IconWikiLink />
           </button>
-          <span className="dsh-notes-sep" />
-
-          {/* 7 视图 */}
-          <button
-            type="button"
-            className="dsh-notes-btn"
-            title={sourceMode ? t('editor.previewMode') : t('editor.sourceMode')}
-            aria-label={sourceMode ? t('editor.previewMode') : t('editor.sourceMode')}
-            aria-pressed={sourceMode}
-            onClick={() => {
-              if (props.onToggleSourceMode !== undefined) props.onToggleSourceMode()
-              else setLocalSourceMode((current) => !current)
-            }}
-          >
-            {sourceMode ? t('editor.modeSourceShort') : t('editor.modePreviewShort')}
-          </button>
-          <button type="button" className="dsh-notes-btn" title={t('editor.saveNow')} aria-label={t('editor.saveNow')} onClick={() => void save()}>
-            <IconCheck />
-          </button>
         </span>
+        )}
+        {/* 7 视图 + 保存:**整篇动作**,固定在右侧、不参与横向滚动。
+            它们以前排在工具栏末尾 → 默认侧栏宽度下被挤出可视区(用户审计:工具栏 662/334,
+            「预览/源码」与「保存」在屏幕外)。 */}
+        {props.showToolbar === false ? null : (
+          <span className="dsh-notes-toolbar dsh-notes-editor-actions">
+            <button
+              type="button"
+              className="dsh-notes-btn"
+              title={sourceMode ? t('editor.previewMode') : t('editor.sourceMode')}
+              aria-label={sourceMode ? t('editor.previewMode') : t('editor.sourceMode')}
+              aria-pressed={sourceMode}
+              onClick={() => {
+                if (props.onToggleSourceMode !== undefined) props.onToggleSourceMode()
+                else setLocalSourceMode((current) => !current)
+              }}
+            >
+              {sourceMode ? t('editor.modeSourceShort') : t('editor.modePreviewShort')}
+            </button>
+            <button type="button" className="dsh-notes-btn" title={t('editor.saveNow')} aria-label={t('editor.saveNow')} onClick={() => void save()}>
+              <IconCheck />
+            </button>
+          </span>
         )}
 
         {/* 标题级别 */}
@@ -902,7 +1040,12 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
                 table: {
                   from: Number(table?.dataset.dshFrom ?? '0'),
                   to: Number(table?.dataset.dshTo ?? '0'),
-                  row: tr === null ? 0 : [...(tr.parentElement?.children ?? [])].indexOf(tr),
+                  // 行号语义:表头 = -1,数据行 = 它在 `<tbody>` 里的下标。
+                  // 不能直接用"节点在父元素里的下标" —— `<thead>` 与 `<tbody>` 各自从 0 开始,
+                  // 表头和第一个数据行都会是 0(旧代码就是这么错位的)。
+                  row: tr === null || tr.parentElement?.tagName === 'THEAD'
+                    ? -1
+                    : [...(tr.parentElement?.children ?? [])].indexOf(tr),
                   col: index < 0 ? 0 : index,
                 },
               })

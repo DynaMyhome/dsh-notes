@@ -16,6 +16,8 @@ import { cssSize } from './scale'
 
 /** props。 */
 export interface QuickOpenProps {
+  /** 框架注入的翻译函数(占位符与空态文案;以前硬编码中文,英文界面里会露出来)。 */
+  t: (key: string) => string
   notes: TreeNote[]
   onPick: (note: TreeNote) => void
   onClose: () => void
@@ -23,7 +25,7 @@ export interface QuickOpenProps {
 
 const MAX = 40
 
-export function QuickOpen({ notes, onPick, onClose }: QuickOpenProps): React.ReactElement {
+export function QuickOpen({ t, notes, onPick, onClose }: QuickOpenProps): React.ReactElement {
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -80,7 +82,7 @@ export function QuickOpen({ notes, onPick, onClose }: QuickOpenProps): React.Rea
         <input
           ref={inputRef}
           value={query}
-          placeholder="快速打开笔记…(Esc 关闭)"
+          placeholder={t('quick.placeholder')}
           onChange={(event) => {
             setQuery(event.target.value)
             setIndex(0)
@@ -117,7 +119,7 @@ export function QuickOpen({ notes, onPick, onClose }: QuickOpenProps): React.Rea
         <div style={{ flex: '1 1 auto', minHeight: '0', overflow: 'auto', padding: '4px' }}>
           {matches.length === 0 ? (
             <div style={{ padding: '10px', fontSize: cssSize(12), color: 'var(--dsw-alias-label-secondary)' }}>
-              没有匹配的笔记
+              {t('quick.empty')}
             </div>
           ) : (
             matches.map((note, position) => (

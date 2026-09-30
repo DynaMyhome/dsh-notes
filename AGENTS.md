@@ -120,6 +120,38 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 - 所以**不许用 `zoom` / `transform: scale`**:浮层坐标是 JS 按视口 px 算的,缩放会把它们整体推偏
   (实测 1.5× 时右键菜单左上空隙就是它的表现)。图标一律走 `icons.tsx` 的外壳
   (自己画 svg 的 `IconChevron` 也要带上 width/height —— 漏了就是"只有折叠箭头不变大")。
+- **浮层材质**:本主题(open-sea-skin)把所有 `--dsw-alias-bg-*` 都做成了半透明 —— 浮层
+  (面板 / 右键菜单 / 弹层 / 提示块)必须配 `--dsw-specific-menu` + `backdrop-filter:
+  var(--dsw-menu-backdrop-filter)`(宿主菜单同一套),否则**背后正文穿透可读**(用户审计实测)。
+
+## 编辑安全(改编辑器前先读这五条,全是踩过的)
+
+1. **重建编辑器只有两个合法理由:「载入」与「切模式」。** 载入 effect 的依赖**只有**
+   `[note.path, sessionId]` —— 把 `sourceMode` 或回调放进去,它们一变就重读磁盘,800ms 自动保存
+   窗口里没落盘的输入会被磁盘内容覆盖(用户实测:切一次「源码/预览」,刚打的字静默消失)。
+   切模式走单独那条 effect:**用当前文档 + 当前光标/滚动**重建,`versionRef`/`dirtyRef` 原样保留。
+2. **卸载前必须 flush。** cleanup 里先取文本 → destroy → `void saveRef.current(text)`;
+   `save()` 因此拆成能吃文本的 `saveText(text)`。
+3. **关页面 / 切后台走 `navigator.sendBeacon`**(`api.saveNoteBeacon`;拿不到就 fetch keepalive):
+   `pagehide` + `visibilitychange(hidden)`。beacon **拿不到响应**,版本号会过期 —— 所以
+   hidden → visible 时要**静默对一次版本**(磁盘内容 == 我们 beacon 写的内容 → adopt 新版本),
+   否则下次保存会误报"文件已被外部修改"(实测踩到)。
+4. **`FS_STALE_VERSION` 要自愈一次**:磁盘内容 == 正要写的内容 → 那是自己写的,只对齐版本、算成功;
+   内容不同才走冲突 UI(真正的**外部**改动内容必然不同)。
+5. **表格行下标语义**(`TableActionTarget.row`):数据行 = `<tbody>` 内下标(0 起),**表头 = -1**。
+   `<thead>`/`<tbody>` 各自从 0 编号,所以**不能**拿"节点在父元素里的下标"当行号 ——
+   旧代码因此"删第一行"变空操作、"删第二行"删掉第一行(用户实测)。块计算是纯函数
+   `applyTableAction`(单测 `test/table-model.test.mjs`),别再把逻辑写回组件里。
+
+另外两条与状态有关的:
+
+- **`refresh` 的依赖要写全**(`[sessionId, syncLayout, openNote]`)。以前只写 `[sessionId]`,
+  于是它一直调用"`layoutReady` 还是 false"那一帧的旧 `syncLayout`(每次都直接 `return current`)
+  → **改名后标签标题/路径永不更新**,继续编辑就会保存到不存在的路径(实测 Host 报 NOT_FOUND)。
+  轮询/可见性/focus 仍然走 `refreshRef.current` —— 这条老规矩不变(否则定时器被反复重建)。
+- **跨异步链读状态要用 ref**:`pendingOpenRef`(新建后自动打开)就是例子 ——
+  `await call('create')` → 回调里 `setPendingOpen` → `await refresh()`,中间**不经过渲染**,
+  state 那时还是旧值(旧代码读到的永远是初值 null,"＋ 建了笔记但不打开")。
 
 
 ## 功能现状(已交付,别重复造)
@@ -138,6 +170,18 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 - **缺 `notes/` 的工作区**:空态卡片 —— 「创建 notes/」或「改用已有目录(按工作区相对路径)」。
 - **字号/图标大小**:标题栏一个 `Aa`(五档预设 + 滑块 + 复位)→ `--dsh-notes-scale`,只作用于笔记区;
   基准字号**跟随**设置 → 通用的「字体大小」。改字号/图标相关的东西前先读上面那节。
+- **不丢字**(2026-10-01 修):切模式/关标签/收分屏/切工作区/关页面都会把未保存的编辑交出去
+  (见「编辑安全」1–3);`FS_STALE_VERSION` 撞上自己刚写的内容时自愈,不误报冲突。
+- **点击落点**(2026-10-01 修):**软换行**的长段落里点哪一行就落在哪一行
+  (以前"不管怎么点光标都在行首",见 `editor/click-hit.ts`);单视觉行仍走浏览器原生文本命中。
+- **表内右键**(2026-10-01 修):删/插行落在**右键那一行**(以前首行删不掉、其余删的是上一行)。
+- **改名/新建**(2026-10-01 修):改名后标签标题与路径跟着变、继续编辑能正常保存(以前保存报
+  NOT_FOUND);树工具栏 ＋ 建了笔记会**自动打开**(以前不打开)。
+- **浮层材质 + 文案**(2026-10-01 修):模态面板/菜单/弹层用宿主菜单材质(不再半透明穿透);
+  widget 与快速打开的文案全部走字典(英文界面不再出现「复制」「⋯ 元数据」),
+  `test/locale-guard.test.mjs` 会拦住以后再硬编码中文。
+- **索引落盘**(2026-10-01 修):内容没变不写盘(以前每 ~8s 整份重写一次,因为 4s 轮询每次都刷
+  `lastUsedAt`);一次写失败不再毒化后续(以前索引从此只活在内存里)。
 - **窗口:** 侧栏 tab 的 chip 是「图标 + Notes」(`sidebar.right.pane.tab.title` 座位)。
 
 ## 位置决定(已实测,别再翻)
@@ -155,7 +199,7 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | 路径 | 作用 |
 | --- | --- |
 | `lib/index.js` | Host 半:配置、索引装配、路由注册、`knowledge` 工具 |
-| `lib/service.js` | 工作区解析与切换、扫描(目录前沿续走)、三类分类、回收站、守卫式保存 |
+| `lib/service.js` | 工作区解析与切换、扫描(目录前沿续走)、三类分类、回收站、守卫式保存;`persist()` 内容去重 + 抗中毒(单测 `test/service-persist.test.mjs`) |
 | `lib/registry.js` | 按工作区的薄索引(登记/忽略/忽略 glob/扫描根/最近使用) |
 | `lib/notes.js` | 纯函数:路径 / frontmatter / 标题(=文件名)/ glob 匹配 |
 | `lib/routes.js` | 内容路由 `/dsh-notes/*`(全部接受 `workspaceKey`) |
@@ -169,23 +213,25 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | `src/client/scale.ts` | 字号/图标缩放的**纯模型**(偏好读写/夹取 + `cssSize()` 公式),单测 `test/scale.test.mjs` |
 | `src/client/ScaleControl.tsx` | 标题栏的 `Aa` 按钮 + 浮层(预设 / 滑块 / 复位) |
 | `src/client/editor/tabs.ts` | 标签/分栏**纯模型**(打开/关闭/移栏/持久化),单测 `test/tabs.test.mjs` |
-| `src/client/EditorArea.tsx` / `TabStrip.tsx` | 分栏渲染、标签条、拖动换栏 |
+| `src/client/EditorArea.tsx` / `TabStrip.tsx` | 分栏渲染、标签条、拖动换栏(切回可见/改字号时 `requestMeasure`) |
+| `src/client/EditorPane.tsx` | 单篇编辑器外壳:**载入 / 切模式重建、守卫式保存 + 卸载 flush + beacon、工具栏(固定右簇)、表格右键、装饰文案** |
+| `src/client/editor/click-hit.ts` | 点击落点**纯函数**(视觉行夹取 + 行内二分),单测 `test/click-hit.test.mjs` |
 | `src/client/TreePane.tsx` | 笔记树(拖拽载荷:`x-dsh-note-id` / `x-dsh-note-title` / `text/plain` = `[[标题]]`) |
 | `src/client/CandidatesPanel.tsx` | 纳入管理面板(最近 / 文件夹 / 已忽略 + 扫描范围) |
-| `src/client/TrashPane.tsx` / `OutlinePane.tsx` / `QuickOpen.tsx` | 回收站 / 大纲 / 快速打开 |
+| `src/client/TrashPane.tsx` / `OutlinePane.tsx` / `QuickOpen.tsx` | 回收站 / 大纲 / 快速打开(`t` 由外壳注入,文案走字典) |
 | `src/client/ContextMenu.tsx` | 共享右键菜单(分组 + 二级菜单 + 视口夹取) |
 | `src/client/editor/setup.ts` | CM6 装配:主题、键位、输入规则、点击命中、工具栏命令 |
 | `src/client/editor/decorate.ts` | 行内装饰 ViewPlugin(`safeBuild` 兜底) |
 | `src/client/editor/table.ts` | 块级 StateField(chip / 表格 / 代码卡 / 公式)+ `tableTab` |
 | `src/client/editor/selection.ts` | 选区包裹的纯逻辑(**必须用 `EditorSelection.range`**) |
-| `src/client/editor/table-model.ts` / `blocks.ts` / `reference.ts` | 纯模型:表格解析 / 块级插入规划 / 引用载荷 |
+| `src/client/editor/table-model.ts` / `blocks.ts` / `reference.ts` | 纯模型:表格解析 / **表内插删行列(`applyTableAction`)** / 块级插入规划 / 引用载荷 |
 | `src/client/editor/media.ts` | 媒体地址工具(单独成模块是为打断 `decorate ⇄ setup` 循环依赖) |
 | `src/client/api.ts` | 客户端 → `/dsh-notes/*` 的薄封装 |
 | `src/client/styles.ts` | 全部 CSS(走主题 token:layer / border-l1-l2 / brand) |
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
 | `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
-| `test/` | `node --test` 单测(145 条) |
+| `test/` | `node --test` 单测(164 条):含 `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(索引去重/抗中毒)、`locale-guard`(双语文案守卫) |
 
 ## 开发与验证
 

@@ -64,13 +64,14 @@ import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { tags as tag } from '@lezer/highlight'
 
 import { cssSize } from '../scale'
+import { bandsFromRects, hitInLine, type VerticalBand } from './click-hit'
 
 import { moveSection as moveSectionText } from '../../../lib/section.js'
 import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
 import { decorateFromTree } from './decorate'
 import { planBlockInsert } from './blocks'
 import { resolveImageUrl } from './media'
-import { tableBlocks, tableTab } from './table'
+import { tableBlocks, tableTab, type WidgetStrings } from './table'
 import { wrapSelectionSpec } from './selection'
 
 /** 行内隐藏/标记装饰。 */
@@ -512,11 +513,13 @@ function safeBuild(
   documentPath: string | null,
   getKnownTitles?: () => Set<string>,
   sourceMode: boolean = isSourceMode(),
+  /** widget 里的提示文案(图片/行内公式的 title),跟随界面语言。 */
+  expandTitle?: string,
 ): DecorationSet {
   try {
     // 装饰决策已全部交给纯决策层(lib/markdown-render.js + editor/decorate.ts):
     // 保证"测试里验证过的行为"就是"编辑器里的行为",这里不再有自己的规则。
-    return decorateFromTree(view, documentPath, getKnownTitles, sourceMode)
+    return decorateFromTree(view, documentPath, getKnownTitles, sourceMode, expandTitle)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('[dsh-notes] 新装饰层失败,回退旧构建器:', error)
@@ -629,18 +632,20 @@ function livePreview(
    * (frontmatter chip 走的是按编辑器传入的 StateField,所以还在,现象很有迷惑性)。
    */
   sourceMode: boolean = isSourceMode(),
+  /** widget 提示文案(图片/行内公式的 title);不传用英文兜底。 */
+  expandTitle?: string,
 ): Extension {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet
 
       constructor(view: EditorView) {
-        this.decorations = safeBuild(view, documentPath, getKnownTitles, sourceMode)
+        this.decorations = safeBuild(view, documentPath, getKnownTitles, sourceMode, expandTitle)
       }
 
       update(update: ViewUpdate): void {
         if (update.docChanged || update.selectionSet || update.viewportChanged) {
-          this.decorations = safeBuild(update.view, documentPath, getKnownTitles, sourceMode)
+          this.decorations = safeBuild(update.view, documentPath, getKnownTitles, sourceMode, expandTitle)
         }
       }
     },
@@ -1002,6 +1007,13 @@ export function createEditor(options: {
    * (装饰插件与块级 StateField 都在扩展里,建好就定了),所以这里是个布尔值。
    */
   sourceMode?: boolean
+  /**
+   * widget 里的文案(代码卡复制按钮、元数据 chip、公式块提示)。
+   *
+   * widget 是命令式 DOM,拿不到 React 的 `t` —— 由外壳按当前语言算一份传进来
+   * (见 `table.ts` 的 `WidgetStrings`);不传就用英文兜底。
+   */
+  strings?: WidgetStrings
 }): EditorHandle {
   const sourceMode = options.sourceMode ?? isSourceMode()
   const state = EditorState.create({
@@ -1049,9 +1061,9 @@ export function createEditor(options: {
       markdown({ base: markdownLanguage, addKeymap: false, extensions: [markdownSyntaxConfig()] }),
       syntaxHighlighting(highlight),
       search({ top: true }),
-      livePreview(options.documentPath, options.getKnownTitles, sourceMode),
+      livePreview(options.documentPath, options.getKnownTitles, sourceMode, options.strings?.chipExpand),
       // 块级装饰必须来自 StateField(CM6 禁止插件提供跨行替换):真表格 + 单元格交互
-      tableBlocks(sourceMode),
+      tableBlocks(sourceMode, options.strings),
       // 点**内容区之外**的空白(下方留白 / 右侧留白)→ 光标落文末并聚焦(Obsidian 手感)。
       //
       // 教训一:内容区**之内**的落点判定一律交回 CM6 自己 —— 曾经在这里推算 y 再
@@ -1216,19 +1228,23 @@ export function createEditor(options: {
    *
    * 为什么不用它:它按 CM6 的行盒模型换算,而我们的装饰(`[[ ]]`、标题折叠、元数据 chip、
    * 表格块)会改变真实行高,于是出现一个**约 0.7 行**的系统偏差(用户实测:鼠标在
-   * `端到端` 这一行,光标落到相邻行)。这里改成:
-   * 1. `elementFromPoint` 拿到鼠标下**真实的 `.cm-line`**;
-   * 2. 在这一行的字符范围内二分,用 `coordsAtPos(pos)` 的 left 与鼠标 x 比较,
-   *    求出"鼠标落在第几个字符之前"。
-   * 这两步都不依赖行盒模型,行高/装饰/缩放都不影响。
+   * `端到端` 这一行,光标落到相邻行)。
+   *
+   * 现在分两层:
+   *   1. **浏览器自己的文本命中**(`caretRangeFromPoint` / `caretPositionFromPoint` →
+   *      `posAtDOM`):软换行、内联 widget、双向文本都由它按真实字形算,最准;
+   *   2. **兜底**:`click-hit.ts` 的"先按真实视觉行夹出位置区间,再在区间内按 x 二分"。
+   *      **不能**用"不在同一视觉行 ⇒ 点在更前面"这种判据 —— 折行的行里那样会一路塌回
+   *      行首(用户实测:"从别处粘进来的长段落,不管鼠标怎么点,光标一直在行的前面")。
+   * 两层都不依赖 CM6 的行盒模型,行高/装饰/缩放都不影响。
    * @param view - 编辑器。
    * @param x - 鼠标 x(视口坐标)。
    * @param y - 鼠标 y(视口坐标)。
    * @returns 文档位置;拿不到(点不在文本行上)返回 null。
    */
   function hitTestPosition(view: EditorView, x: number, y: number): number | null {
-    const domLine = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest?.('.cm-line')
-    if (domLine === null || domLine === undefined) return null
+    const domLine = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest?.('.cm-line') ?? null
+    if (domLine === null) return null
     let start: number
     try {
       start = view.posAtDOM(domLine, 0)
@@ -1237,23 +1253,51 @@ export function createEditor(options: {
     }
     const line = view.state.doc.lineAt(start)
     if (line.from === line.to) return line.from
-    // 二分:找最后一个"左边界 <= 鼠标 x"的字符位置
-    let low = line.from
-    let high = line.to
-    while (low < high) {
-      const mid = Math.floor((low + high + 1) / 2)
-      const box = view.coordsAtPos(mid)
-      if (box === null) break
-      // 软换行时不同视觉行不可比:用 y 先筛掉不在同一视觉行的坐标
-      const sameRow = y >= box.top - 2 && y <= box.bottom + 2
-      if (!sameRow) {
-        high = mid - 1
-        continue
-      }
-      if (box.left <= x) low = mid
-      else high = mid - 1
+    const native = nativePosition(view, x, y)
+    if (native !== null && native >= line.from && native <= line.to) return native
+    const bands = lineBands(domLine)
+    if (bands.length === 0) return null
+    return hitInLine({
+      from: line.from,
+      to: line.to,
+      bands,
+      x,
+      y,
+      topAt: (pos) => view.coordsAtPos(pos)?.top ?? null,
+      leftAt: (pos) => view.coordsAtPos(pos)?.left ?? null,
+    })
+  }
+
+  /** 一条 DOM 行的各**视觉行**(软换行后一条 `\n` 行会有好几条)。 */
+  function lineBands(domLine: HTMLElement): VerticalBand[] {
+    try {
+      const range = document.createRange()
+      range.selectNodeContents(domLine)
+      return bandsFromRects([...range.getClientRects()])
+    } catch {
+      return []
     }
-    return low
+  }
+
+  /** 浏览器自身的文本命中(老浏览器/异常时返回 null,由兜底接住)。 */
+  function nativePosition(view: EditorView, x: number, y: number): number | null {
+    const target = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+    }
+    try {
+      if (typeof target.caretRangeFromPoint === 'function') {
+        const range = target.caretRangeFromPoint(x, y)
+        if (range !== null) return view.posAtDOM(range.startContainer, range.startOffset)
+      }
+      if (typeof target.caretPositionFromPoint === 'function') {
+        const position = target.caretPositionFromPoint(x, y)
+        if (position !== null) return view.posAtDOM(position.offsetNode, position.offset)
+      }
+    } catch {
+      return null
+    }
+    return null
   }
 
   /**
