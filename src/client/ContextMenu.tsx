@@ -69,13 +69,19 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
     }
   }, [props])
 
-  const renderEntries = (entries: MenuEntry[]): React.ReactElement => (
+  const renderEntries = (entries: MenuEntry[], depth: number): React.ReactElement => (
     <div className="dsh-notes-menu" role="menu">
       {entries.map((entry) =>
         entry.separator === true ? (
           <div key={entry.id} className="dsh-notes-menu-sep" />
         ) : (
-          <div key={entry.id} className="dsh-notes-menu-row" onMouseEnter={() => setOpenSub(entry.children === undefined ? null : entry.id)}>
+          <div
+            key={entry.id}
+            className="dsh-notes-menu-row"
+            // **只有顶层行**才管二级菜单的开合:子菜单里的行如果也 setOpenSub(null),
+            // 鼠标刚移到子菜单上它就被关掉(用户实测"放上去直接消失")。
+            onMouseEnter={depth === 0 ? () => setOpenSub(entry.children === undefined ? null : entry.id) : undefined}
+          >
             <button
               type="button"
               role="menuitem"
@@ -95,7 +101,7 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
               {entry.children !== undefined ? <span className="dsh-notes-menu-arrow">›</span> : null}
             </button>
             {entry.children !== undefined && openSub === entry.id ? (
-              <div className="dsh-notes-submenu">{renderEntries(entry.children)}</div>
+              <div className="dsh-notes-submenu">{renderEntries(entry.children, depth + 1)}</div>
             ) : null}
           </div>
         ),
@@ -104,8 +110,14 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
   )
 
   return (
-    <div className="dsh-notes-context" ref={ref} style={{ left: pos.x, top: pos.y }}>
-      {renderEntries(props.entries)}
+    <div
+      className="dsh-notes-context"
+      ref={ref}
+      style={{ left: pos.x, top: pos.y }}
+      // 离开整个菜单才收起子菜单(而不是离开某一行)
+      onMouseLeave={() => setOpenSub(null)}
+    >
+      {renderEntries(props.entries, 0)}
     </div>
   )
 }
