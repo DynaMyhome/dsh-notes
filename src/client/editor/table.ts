@@ -128,6 +128,11 @@ class TableWidget extends WidgetType {
       // 它对布局零影响 —— 不撑列、不撑行、不把下方内容顶走,也不会把文字裁掉。
       // 单元格里原来那串文本**保留**(绝对定位元素不参与布局,列宽仍由文本决定),
       // 输入框自己带底色盖在上面;取消编辑时只要移除输入框即可还原。
+      // 编辑时把单元格原来那串文本**变透明**:主题的 layer 色是半透明的,输入框的
+      // background 挡不住下面的文字 → 打字时上下两层叠在一起(用户实测"重影")。
+      // 文本仍在(列宽由它决定),只是不可见;结束编辑时还原。
+      const previousColor = host.style.color
+      host.style.color = 'transparent'
       const input = document.createElement('input')
       input.className = 'dsh-cm-table-input'
       input.size = 1
@@ -141,6 +146,7 @@ class TableWidget extends WidgetType {
         done = true
         const value = input.value
         openCellInputs.delete(input)
+        host.style.color = previousColor
         if (save && value !== cell.text) {
           // 有改动:dispatch 会让 StateField 重建 widget,DOM 自然还原
           view.dispatch({ changes: { from: cell.from, to: cell.to, insert: value } })
