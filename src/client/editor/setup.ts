@@ -1165,7 +1165,25 @@ export function createEditor(options: {
     // `closest('.cm-content')` 会返回 null,把 widget 点击误判成"内容区之外"。
     // 必须先用 contains 判活,否则会把光标从代码块里踢出去。
     if (!view.dom.contains(target)) return
-    if (view.contentDOM.contains(target)) return
+    if (view.contentDOM.contains(target)) {
+      // 点在正文里由 CM6 自己定位。但**带装饰的行**(`[[ ]]` 那层会改变行内布局)坐标会漂,
+      // 表现就是"鼠标在这一行、光标落到相邻行"。这里只对 `[[ ]]` 装饰做一次事后纠正:
+      // 用那层装饰自己的矩形中点重算位置;其它情况完全不插手(避免干扰拖选)。
+      const wiki = (target as HTMLElement | null)?.closest?.('.dsh-cm-wiki, .dsh-cm-wiki-new')
+      if (wiki !== null && wiki !== undefined) {
+        const rect = wiki.getBoundingClientRect()
+        const clientX = event.clientX
+        window.requestAnimationFrame(() => {
+          const fixed = view.posAtCoords({ x: clientX, y: rect.top + rect.height / 2 })
+          if (fixed === null) return
+          const current = view.state.selection.main
+          if (view.state.doc.lineAt(current.head).number !== view.state.doc.lineAt(fixed).number) {
+            view.dispatch({ selection: { anchor: fixed } })
+          }
+        })
+      }
+      return
+    }
     const box = view.scrollDOM.getBoundingClientRect()
     const barX = view.scrollDOM.offsetWidth - view.scrollDOM.clientWidth
     const barY = view.scrollDOM.offsetHeight - view.scrollDOM.clientHeight
@@ -1173,8 +1191,35 @@ export function createEditor(options: {
     if (barY > 0 && event.clientY >= box.bottom - barY - 1) return
     const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false) ?? view.state.doc.length
     event.preventDefault()
-    view.dispatch({ selection: { anchor: position } })
+    view.dispatch({ selection: { anchor: fixDrift(view, event, position) } })
     view.focus()
+  }
+
+  /**
+   * 坐标解出来的行如果和**真实命中的 DOM 行**不是同一行,就用那一行的中点重算一次。
+   *
+   * 用户实测:点在 `[[链接]]` 那一行,光标却落在相邻行(偏一点)。行高不一致(装饰/标题/
+   * 空行)时 `posAtCoords` 会漂;DOM 里的 `.cm-line` 才是"鼠标下面真正的那一行",拿它的
+   * 垂直中点再解一次,行就不会漂,横向列位仍由 clientX 决定。
+   * @param view - 编辑器。
+   * @param event - 鼠标事件。
+   * @param fallback - 原来的解。
+   * @returns 修正后的文档位置。
+   */
+  function fixDrift(view: EditorView, event: MouseEvent, fallback: number): number {
+    const domLine = (document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null)?.closest?.('.cm-line')
+    if (domLine === null || domLine === undefined) return fallback
+    let start: number
+    try {
+      start = view.posAtDOM(domLine, 0)
+    } catch {
+      return fallback
+    }
+    const target = view.state.doc.lineAt(start).number
+    if (view.state.doc.lineAt(fallback).number === target) return fallback
+    const rect = domLine.getBoundingClientRect()
+    const fixed = view.posAtCoords({ x: event.clientX, y: rect.top + rect.height / 2 })
+    return fixed ?? fallback
   }
   view.dom.addEventListener('mousedown', onEditorMousedown)
 
