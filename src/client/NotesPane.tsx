@@ -34,6 +34,7 @@ import {
   type TreeUnfiled,
 } from './api'
 import { EditorArea } from './EditorArea'
+import { setSourceMode as applySourceMode } from './editor/mode'
 import {
   emptyLayout,
   loadLayout,
@@ -86,6 +87,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([])
   const [wsMenu, setWsMenu] = useState(false)
   const [wsDraft, setWsDraft] = useState('')
+  /** 每栏的源码/预览模式:分屏时左边预览、右边源码是常态,所以按栏存。 */
+  const [sourceModeByPane, setSourceModeByPane] = useState<Record<'p1' | 'p2', boolean>>({ p1: false, p2: false })
 
   /**
    * 标签/分栏布局(按工作区持久化;切换工作区各用各的)。
@@ -1218,6 +1221,15 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             activePane={activePane}
             onFocusPane={setActivePane}
             onQuickOpen={() => setQuickOpen(true)}
+            sourceModeByPane={sourceModeByPane}
+            onToggleSourceMode={(id) =>
+              setSourceModeByPane((current) => {
+                const next = { ...current, [id]: !current[id] }
+                // 顺带更新模块级开关:仍读单例的回退路径(旧装饰构建器等)也跟着这一栏
+                applySourceMode(next[id])
+                return next
+              })
+            }
           />
         </section>
       </div>

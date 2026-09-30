@@ -167,10 +167,11 @@ export function decorateFromTree(
   view: EditorView,
   documentPath: string | null,
   getKnownTitles?: () => Set<string>,
+  sourceMode: boolean = isSourceMode(),
 ): DecorationSet {
   const state = view.state
-  // 源码模式:一个装饰都不加(看到的就是磁盘上的纯 markdown)
-  if (isSourceMode()) return Decoration.none
+  // 源码模式:一个装饰都不加(看到的就是磁盘上的纯 markdown);模式按**编辑器**传入
+  if (sourceMode) return Decoration.none
   // 全量解析(带 timeout 兜底:解析不出来就当没装饰,绝不阻塞输入)
   const tree = ensureSyntaxTree(state, state.doc.length, 60)
   if (tree === null) return Decoration.none

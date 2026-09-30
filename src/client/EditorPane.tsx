@@ -86,6 +86,12 @@ export interface EditorPaneProps {
   onWikiLink?: (title: string) => void
   /** 当前工作区已知标题(双链上色用)。 */
   getKnownTitles?: () => Set<string>
+  /**
+   * 源码模式由**外壳**控制(分屏时两栏各自独立);不传就退回组件内部 state。
+   * 切模式仍然靠重建编辑器(装饰与 StateField 都在扩展里,建好就定了)。
+   */
+  sourceMode?: boolean
+  onToggleSourceMode?: () => void
 }
 
 /** 保存状态。 */
@@ -115,7 +121,8 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   const [docPath, setDocPath] = useState<string | null>(null)
   const [length, setLength] = useState(0)
   /** 源码模式(Typora 式:默认预览,标记全隐藏;要看/改源码时切过来)。 */
-  const [sourceMode, setSourceMode] = useState(false)
+  const [localSourceMode, setLocalSourceMode] = useState(false)
+  const sourceMode = props.sourceMode ?? localSourceMode
   /** 当前打开的工具栏弹层(标题 / 链接 / 表格 / 公式)。 */
   const [popover, setPopover] = useState<ToolPopover>(null)
   /** 弹层左缘(相对编辑器条):开弹层时按按钮位置算一次,窄侧栏里夹回可见范围。 */
@@ -184,6 +191,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
           parent: host,
           doc: loaded.text,
           documentPath: loaded.absolutePath,
+          sourceMode,
           onChange: () => {
             dirtyRef.current = true
             setSaveState('dirty')
@@ -506,7 +514,10 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
             title={sourceMode ? t('editor.previewMode') : t('editor.sourceMode')}
             aria-label={sourceMode ? t('editor.previewMode') : t('editor.sourceMode')}
             aria-pressed={sourceMode}
-            onClick={() => setSourceMode((current) => !current)}
+            onClick={() => {
+              if (props.onToggleSourceMode !== undefined) props.onToggleSourceMode()
+              else setLocalSourceMode((current) => !current)
+            }}
           >
             {sourceMode ? t('editor.modeSourceShort') : t('editor.modePreviewShort')}
           </button>

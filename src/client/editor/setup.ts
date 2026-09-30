@@ -505,11 +505,12 @@ function safeBuild(
   view: EditorView,
   documentPath: string | null,
   getKnownTitles?: () => Set<string>,
+  sourceMode: boolean = isSourceMode(),
 ): DecorationSet {
   try {
     // 装饰决策已全部交给纯决策层(lib/markdown-render.js + editor/decorate.ts):
     // 保证"测试里验证过的行为"就是"编辑器里的行为",这里不再有自己的规则。
-    return decorateFromTree(view, documentPath, getKnownTitles)
+    return decorateFromTree(view, documentPath, getKnownTitles, sourceMode)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('[dsh-notes] 新装饰层失败,回退旧构建器:', error)
@@ -904,7 +905,15 @@ export function createEditor(options: {
   onWikiLink?: (title: string) => void
   /** 当前工作区已知的笔记标题(双链能不能对上)。 */
   getKnownTitles?: () => Set<string>
+  /**
+   * 这个编辑器是不是源码模式(默认跟随模块级开关)。
+   *
+   * 按编辑器传入是为了分屏:左右两栏可以一栏预览、一栏源码。切模式仍然靠**重建编辑器**
+   * (装饰插件与块级 StateField 都在扩展里,建好就定了),所以这里是个布尔值。
+   */
+  sourceMode?: boolean
 }): EditorHandle {
+  const sourceMode = options.sourceMode ?? isSourceMode()
   const state = EditorState.create({
     doc: options.doc,
     extensions: [
@@ -937,9 +946,9 @@ export function createEditor(options: {
       markdown({ base: markdownLanguage, addKeymap: false, extensions: [markdownSyntaxConfig()] }),
       syntaxHighlighting(highlight),
       search({ top: true }),
-      livePreview(options.documentPath, options.getKnownTitles),
+      livePreview(options.documentPath, options.getKnownTitles, sourceMode),
       // 块级装饰必须来自 StateField(CM6 禁止插件提供跨行替换):真表格 + 单元格交互
-      tableBlocks(),
+      tableBlocks(sourceMode),
       // 点**内容区之外**的空白(下方留白 / 右侧留白)→ 光标落文末并聚焦(Obsidian 手感)。
       //
       // 教训一:内容区**之内**的落点判定一律交回 CM6 自己 —— 曾经在这里推算 y 再
