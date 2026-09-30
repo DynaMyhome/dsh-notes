@@ -332,7 +332,8 @@ class CodeCardWidget extends WidgetType {
       box.addEventListener('blur', () => commit(true))
       bar.replaceChild(box, label)
       box.focus()
-      box.select()
+      // 不全选:光标落末尾(不要一编辑就把 JS 全选中)
+      box.setSelectionRange(box.value.length, box.value.length)
     })
     const copy = document.createElement('button')
     copy.type = 'button'
@@ -381,6 +382,10 @@ class CodeCardWidget extends WidgetType {
           keyEvent.preventDefault()
           commit(keyEvent.key !== 'Escape')
         }
+      })
+      box.addEventListener('input', () => {
+        // 回车换行后自动长高(否则新行被 scroll 吃掉,看起来像加不了行)
+        box.rows = Math.max(1, box.value.split('\n').length)
       })
       box.addEventListener('blur', () => commit(true))
       pre.replaceChildren(box)
