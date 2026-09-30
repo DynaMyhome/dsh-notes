@@ -15,6 +15,7 @@ import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 
 import { isSourceMode } from './mode'
+import { isDelimiterRow, parseTable, type TableModel } from './table-model'
 import { frontmatterEndOf } from './frontmatter'
 import { jsxLanguage, tsxLanguage, javascript, javascriptLanguage, typescriptLanguage } from '@codemirror/lang-javascript'
 import { json, jsonLanguage } from '@codemirror/lang-json'
@@ -23,69 +24,6 @@ import { highlightTree, tagHighlighter, tags as tokenTags } from '@lezer/highlig
 import temml from 'temml'
 
 /** 一个单元格:文本 + 它在**文档中的绝对范围**。 */
-export interface TableCell {
-  text: string
-  from: number
-  to: number
-}
-
-/** 表格模型。 */
-export interface TableModel {
-  header: TableCell[]
-  rows: TableCell[][]
-}
-
-/** `|---|:--|` 这种分隔行。 */
-export function isDelimiterRow(line: string): boolean {
-  return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line)
-}
-
-/** 把一行的 `|a|b|` 切成单元格文本。 */
-function splitCells(line: string): string[] {
-  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '')
-  return trimmed.split('|').map((cell) => cell.trim())
-}
-
-/**
- * 解析表格源码(相对偏移 + `base` = 表格在文档里的起点)。
- * @param source - 表格文本(不含前后空行)。
- * @param base - 该文本在文档中的起始位置。
- */
-export function parseTable(source: string, base: number): TableModel {
-  const header: TableCell[] = []
-  const rows: TableCell[][] = []
-  let offset = 0
-  let seenHeader = false
-  for (const line of source.split(/\r?\n/)) {
-    const lineStart = base + offset
-    offset += line.length + 1 // +1 = 换行
-    if (line.trim() === '') continue
-    if (isDelimiterRow(line)) continue
-    // 逐个单元格算出绝对范围:按 `|` 切,并把相对位置加回 base
-    const cells: TableCell[] = []
-    let cursor = 0
-    const parts = line.split('|')
-    for (const part of parts) {
-      const partStart = cursor
-      cursor += part.length + 1
-      if (part.trim() === '' && (partStart === 0 || partStart + part.length >= line.length)) continue
-      cells.push({
-        text: part.trim(),
-        from: lineStart + partStart + (line[partStart] === ' ' ? 1 : 0),
-        to: lineStart + partStart + part.length,
-      })
-    }
-    if (cells.length === 0) continue
-    if (!seenHeader) {
-      header.push(...cells)
-      seenHeader = true
-    } else {
-      rows.push(cells)
-    }
-  }
-  return { header, rows }
-}
-
 /** 当前打开的单元格输入框(切换单元格时用来避免互相抢焦点)。 */
 const openCellInputs = new Set<HTMLInputElement>()
 
