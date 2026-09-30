@@ -10,6 +10,8 @@
  * 都放进这一个 tab 内部分栏,中央对话永不被遮挡。
  */
 
+import React from 'react'
+
 import { NotesPane } from './NotesPane'
 import { CSS } from './styles'
 
@@ -33,6 +35,12 @@ const ZH: Record<string, string> = {
   'tree.summary': '{n} 篇笔记 · {c} 个分类',
   'tree.empty': '这个工作区还没有笔记。标题栏 ＋ 新建,或让 Agent 写一篇 md 再登记。',
   'tree.hint': '「未归类文件」是笔记根下存在、但还没纳入笔记树的 md:点一下即可纳入。',
+  'tabs.close': '关闭标签(中键也可以)',
+  'tabs.quickOpen': '快速打开(Ctrl/Cmd+P)',
+  'tabs.splitRight': '向右分屏(也可以把标签拖过去)',
+  'tabs.moveLeft': '移到左栏',
+  'tabs.closeSplit': '关闭分屏(标签并入左栏)',
+  'tabs.mergeShort': '合并',
   'ws.switch': '切换工作区(笔记区域可以看别的已登记工作区)',
   'ws.sessionWorkspace': '会话工作区',
   'ws.sessionTag': '当前会话',
@@ -126,6 +134,30 @@ const ZH: Record<string, string> = {
   'editor.sourceMode': '切回预览模式(隐藏标记)',
   'editor.modeSourceShort': '源码',
   'editor.modePreviewShort': '预览',
+  'editor.undo': '撤销(Ctrl/Cmd+Z)',
+  'editor.redo': '重做(Ctrl/Cmd+Shift+Z)',
+  'editor.headingMenu': '标题级别',
+  'editor.bodyText': '正文',
+  'editor.strike': '删除线 ~~…~~',
+  'editor.orderedList': '有序列表',
+  'editor.taskList': '任务列表 - [ ]',
+  'editor.indent': '增加缩进',
+  'editor.outdent': '减少缩进',
+  'editor.codeBlock': '代码块 ```',
+  'editor.hr': '分隔线 ---',
+  'editor.link': '插入链接',
+  'editor.linkText': '链接文字(留空则用选中文本)',
+  'editor.linkUrl': '网址 URL(可留空稍后填)',
+  'editor.table': '插入表格',
+  'editor.tableHint': '拖动选择行 × 列',
+  'editor.tableSize': '{r} 行 × {c} 列',
+  'editor.math': '插入公式',
+  'editor.mathTex': 'TeX 代码,如 a^2+b^2=c^2',
+  'editor.mathInline': '行内公式',
+  'editor.mathBlock': '块级公式',
+  'editor.wikiLink': '双链 [[笔记标题]]',
+  'editor.confirm': '插入',
+  'editor.cancel': '取消',
   'tree.into': '归入',
   'tree.before': '插到',
   'tree.after': '插到',
@@ -183,6 +215,12 @@ const EN: Record<string, string> = {
   'tree.summary': '{n} notes · {c} collections',
   'tree.empty': 'No notes in this workspace yet. Use + in the header, or have the agent write a .md and register it.',
   'tree.hint': '“Unfiled files” are .md under the notes root that are not in the tree yet — click one to file it.',
+  'tabs.close': 'Close tab (middle-click works too)',
+  'tabs.quickOpen': 'Quick open (Ctrl/Cmd+P)',
+  'tabs.splitRight': 'Split right (or drag the tab over)',
+  'tabs.moveLeft': 'Move to left pane',
+  'tabs.closeSplit': 'Close split (tabs merge into the left pane)',
+  'tabs.mergeShort': 'Merge',
   'ws.switch': 'Switch workspace (the notes pane can look at another registered workspace)',
   'ws.sessionWorkspace': 'Session workspace',
   'ws.sessionTag': 'this session',
@@ -315,6 +353,30 @@ const EN: Record<string, string> = {
   'editor.sourceMode': 'Back to preview mode (markers hidden)',
   'editor.modeSourceShort': 'Source',
   'editor.modePreviewShort': 'Preview',
+  'editor.undo': 'Undo (Ctrl/Cmd+Z)',
+  'editor.redo': 'Redo (Ctrl/Cmd+Shift+Z)',
+  'editor.headingMenu': 'Heading level',
+  'editor.bodyText': 'Body text',
+  'editor.strike': 'Strikethrough ~~…~~',
+  'editor.orderedList': 'Ordered list',
+  'editor.taskList': 'Task list - [ ]',
+  'editor.indent': 'Increase indent',
+  'editor.outdent': 'Decrease indent',
+  'editor.codeBlock': 'Code block ```',
+  'editor.hr': 'Horizontal rule ---',
+  'editor.link': 'Insert link',
+  'editor.linkText': 'Link text (empty = selection)',
+  'editor.linkUrl': 'URL (may stay empty)',
+  'editor.table': 'Insert table',
+  'editor.tableHint': 'Drag to pick rows × columns',
+  'editor.tableSize': '{r} rows × {c} columns',
+  'editor.math': 'Insert math',
+  'editor.mathTex': 'TeX source, e.g. a^2+b^2=c^2',
+  'editor.mathInline': 'Inline math',
+  'editor.mathBlock': 'Block math',
+  'editor.wikiLink': 'Wiki link [[note title]]',
+  'editor.confirm': 'Insert',
+  'editor.cancel': 'Cancel',
   'panel.files': 'Files',
   'panel.outline': 'Outline',
   'outline.empty': 'No headings in this note yet. Write a `# heading` line to see it here.',
@@ -364,6 +426,8 @@ export function apply(ctx: any): void {
   )
 
   // 2) tab 面板体:键必须是 tab 定义里的 id。
+  //    外面再套一层错误边界:宿主插槽渲染失败时只会留一个空 div(实测踩到),
+  //    空白面板极难排查;这里把错误直接画出来(平时正常渲染时零开销)。
   ctx.slots.inject('sidebar.right.pane.tab', () =>
     ctx.slots.register(
       {
@@ -371,10 +435,57 @@ export function apply(ctx: any): void {
         key: ID,
         locale: NS,
       },
-      NotesPane as any,
+      NotesPaneWithBoundary as any,
     ),
   )
 }
 
 /** 只声明本插件真正读取的服务(硬依赖可选服务会在他处禁用该服务时拖垮整个 GUI)。 */
 export const inject = ['slots', 'locale', 'sidebarRightTabs']
+
+/**
+ * 面板 = NotesPane 外面套一层错误边界。
+ *
+ * 注意:注册的必须是**带 children 的包装组件** —— 直接把边界类注册上去的话
+ * children 是空的,面板什么都不渲染(实测踩到:整个笔记区域空白)。
+ */
+function NotesPaneWithBoundary(props: Record<string, unknown>): React.ReactElement {
+  return (
+    <PaneBoundary>
+      <NotesPane {...(props as never)} />
+    </PaneBoundary>
+  )
+}
+
+/**
+ * 笔记面板的渲染兜底。
+ *
+ * 宿主插槽在渲染抛错时只留一个空 div(`data-slot-error`),界面上看不到任何信息。
+ * 这一层把错误的栈直接画出来,顺带把上下文写进 console,免得再出现"面板莫名空白"。
+ */
+class PaneBoundary extends React.Component<{ children?: React.ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error }
+  }
+
+  componentDidCatch(error: Error): void {
+    // eslint-disable-next-line no-console
+    console.error('[dsh-notes] 面板渲染失败', error)
+  }
+
+  render(): React.ReactNode {
+    if (this.state.error !== null) {
+      return (
+        <div className="dsh-notes-root">
+          <div className="dsh-notes-header">
+            <span className="dsh-notes-title">dsh-notes 渲染失败</span>
+          </div>
+          <pre className="dsh-notes-crash">{String(this.state.error?.stack ?? this.state.error)}</pre>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}

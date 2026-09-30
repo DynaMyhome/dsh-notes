@@ -16,7 +16,17 @@ import { parseOutline } from '../../lib/outline.js'
 import { RouteError, readNote, saveNote, uploadAsset, type TreeNote } from './api'
 import {
   createEditor,
+  historyRedo,
+  historyUndo,
+  insertCodeFence,
+  insertHorizontalRule,
   insertImageSnippet,
+  insertLink,
+  insertMath,
+  insertTable,
+  insertWikiLinkSnippet,
+  setHeading,
+  toggleIndent,
   toggleLinePrefix,
   wrapSelection,
   type EditorHandle,
@@ -28,17 +38,36 @@ import {
   IconBold,
   IconCheck,
   IconCode,
-  IconHeading,
+  IconCodeBlock,
+  IconHr,
   IconHighlight,
   IconImage,
+  IconIndent,
   IconItalic,
+  IconLink,
   IconList,
+  IconMath,
+  IconOrderedList,
+  IconOutdent,
   IconQuote,
+  IconRedo,
+  IconStrike,
+  IconTable,
+  IconTaskList,
+  IconUndo,
   IconWarn,
+  IconWikiLink,
 } from './icons'
 
 /** 自动保存的静默时长(ms)。 */
 const AUTOSAVE_MS = 800
+
+/** 工具栏弹层:需要参数的命令(同一时刻只开一个)。 */
+type ToolPopover = 'heading' | 'link' | 'table' | 'math' | null
+
+/** 表格选择器的网格上限(行 × 列)。 */
+const TABLE_ROWS = 6
+const TABLE_COLS = 8
 
 /** props。 */
 export interface EditorPaneProps {
@@ -87,6 +116,17 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   const [length, setLength] = useState(0)
   /** 源码模式(Typora 式:默认预览,标记全隐藏;要看/改源码时切过来)。 */
   const [sourceMode, setSourceMode] = useState(false)
+  /** 当前打开的工具栏弹层(标题 / 链接 / 表格 / 公式)。 */
+  const [popover, setPopover] = useState<ToolPopover>(null)
+  /** 弹层左缘(相对编辑器条):开弹层时按按钮位置算一次,窄侧栏里夹回可见范围。 */
+  const [popoverLeft, setPopoverLeft] = useState(8)
+  const [linkText, setLinkText] = useState('')
+  const [linkUrl, setLinkUrl] = useState('')
+  const [mathTex, setMathTex] = useState('')
+  /** 表格选择器里光标悬停到的 行×列。 */
+  const [tablePick, setTablePick] = useState<{ rows: number; cols: number } | null>(null)
+  /** 编辑器条(弹层的定位上下文 + 判断"点在外面"的边界)。 */
+  const barRef = useRef<HTMLDivElement | null>(null)
 
   /** 保存(守卫式)。 */
   const save = useCallback(async (): Promise<void> => {
@@ -243,11 +283,86 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     return () => window.clearTimeout(timer)
   }, [notice])
 
+  /**
+   * 执行一个工具栏命令。
+   *
+   * 顺手收起弹层:弹层与"直接生效"的命令是互斥的,留着它会挡住刚改过的正文。
+   */
   const apply = useCallback((action: (handle: EditorHandle) => void) => {
+    setPopover(null)
     const editor = editorRef.current
     if (editor === null) return
     action(editor)
   }, [])
+
+  /** 当前选区文本(链接弹层的默认"文字");换行折成空格,免得整段被塞进链接)。 */
+  const selectionText = useCallback((): string => {
+    const view = editorRef.current?.view
+    if (view === undefined) return ''
+    const range = view.state.selection.main
+    return view.state.sliceDoc(range.from, range.to).replace(/\s*\n\s*/g, ' ')
+  }, [])
+
+  /**
+   * 打开 / 收起弹层。
+   *
+   * 定位靠 `getBoundingClientRect` 算出的**相对编辑器条**左缘:弹层是编辑器条的绝对定位
+   * 子节点,而不是工具栏的子节点 —— 工具栏为了横向滚动是 `overflow:auto`,弹层放里面会被裁掉。
+   */
+  const openPopover = useCallback(
+    (kind: Exclude<ToolPopover, null>, element: HTMLElement, seed = '') => {
+      setPopover((current) => (current === kind ? null : kind))
+      // 每次打开都重置弹层自己的字段,免得上一次的输入惊喜地留在框里
+      if (kind === 'link') {
+        setLinkText(seed)
+        setLinkUrl('')
+      } else if (kind === 'math') {
+        setMathTex('')
+      } else if (kind === 'table') {
+        setTablePick(null)
+      }
+      const bar = barRef.current
+      if (bar === null) return
+      const anchor = element.getBoundingClientRect()
+      const bounds = bar.getBoundingClientRect()
+      setPopoverLeft(Math.max(4, Math.min(anchor.left - bounds.left, Math.max(4, bounds.width - 272))))
+    },
+    [],
+  )
+
+  /** 弹层:点编辑器条之外收起,Escape 也收起(Enter 确认由各输入框自己处理)。 */
+  useEffect(() => {
+    if (popover === null) return undefined
+    const onMouseDown = (event: MouseEvent): void => {
+      const target = event.target as Node | null
+      if (target !== null && barRef.current?.contains(target) === true) return
+      setPopover(null)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      setPopover(null)
+    }
+    document.addEventListener('mousedown', onMouseDown, true)
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown, true)
+      document.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [popover])
+
+  /** 链接弹层确认。 */
+  const confirmLink = useCallback(() => {
+    apply((e) => insertLink(e.view, linkText, linkUrl))
+  }, [apply, linkText, linkUrl])
+
+  /** 公式弹层确认(`block` = 块级 `$$…$$`)。 */
+  const confirmMath = useCallback(
+    (block: boolean) => {
+      apply((e) => insertMath(e.view, mathTex, block))
+    },
+    [apply, mathTex],
+  )
 
   const stateText =
     status === 'loading'
@@ -262,36 +377,129 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
 
   return (
     <div className="dsh-notes-editor-pane">
-      <div className="dsh-notes-editor-bar">
+      {/* 编辑器条是弹层的定位上下文(弹层挂在条上,不是挂在会滚动的工具栏里) */}
+      <div className="dsh-notes-editor-bar" ref={barRef}>
         <span className="dsh-notes-editor-name" title={docPath ?? note.path}>
           {note.title}
         </span>
         <span className="dsh-notes-spacer" />
-        <span className="dsh-notes-toolbar dsh-notes-editor-tools">
+        {/* 一行命令:放不下就横向滚动(见 styles.ts),分组用细分隔线 */}
+        <span className="dsh-notes-toolbar dsh-notes-editor-tools" role="toolbar">
+          {/* 1 历史 */}
+          <button type="button" className="dsh-notes-btn" title={t('editor.undo')} aria-label={t('editor.undo')} onClick={() => apply((e) => historyUndo(e.view))}>
+            <IconUndo />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.redo')} aria-label={t('editor.redo')} onClick={() => apply((e) => historyRedo(e.view))}>
+            <IconRedo />
+          </button>
+          <span className="dsh-notes-sep" />
+
+          {/* 2 标题:级别按行生效,正文 = 去掉标题 */}
+          <button
+            type="button"
+            className="dsh-notes-btn"
+            title={t('editor.headingMenu')}
+            aria-label={t('editor.headingMenu')}
+            aria-haspopup="menu"
+            aria-expanded={popover === 'heading'}
+            onClick={(event) => openPopover('heading', event.currentTarget)}
+          >
+            <span className="dsh-notes-h-mark">H</span>
+            <span className="dsh-notes-caret-mark">▾</span>
+          </button>
+          <span className="dsh-notes-sep" />
+
+          {/* 3 行内 */}
           <button type="button" className="dsh-notes-btn" title={t('editor.bold')} aria-label={t('editor.bold')} onClick={() => apply((e) => wrapSelection(e.view, '**'))}>
             <IconBold />
           </button>
           <button type="button" className="dsh-notes-btn" title={t('editor.italic')} aria-label={t('editor.italic')} onClick={() => apply((e) => wrapSelection(e.view, '*'))}>
             <IconItalic />
           </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.strike')} aria-label={t('editor.strike')} onClick={() => apply((e) => wrapSelection(e.view, '~~'))}>
+            <IconStrike />
+          </button>
           <button type="button" className="dsh-notes-btn" title={t('editor.highlight')} aria-label={t('editor.highlight')} onClick={() => apply((e) => wrapSelection(e.view, '=='))}>
             <IconHighlight />
-          </button>
-          <button type="button" className="dsh-notes-btn" title={t('editor.heading')} aria-label={t('editor.heading')} onClick={() => apply((e) => toggleLinePrefix(e.view, '## '))}>
-            <IconHeading />
-          </button>
-          <button type="button" className="dsh-notes-btn" title={t('editor.list')} aria-label={t('editor.list')} onClick={() => apply((e) => toggleLinePrefix(e.view, '- '))}>
-            <IconList />
-          </button>
-          <button type="button" className="dsh-notes-btn" title={t('editor.quote')} aria-label={t('editor.quote')} onClick={() => apply((e) => toggleLinePrefix(e.view, '> '))}>
-            <IconQuote />
           </button>
           <button type="button" className="dsh-notes-btn" title={t('editor.code')} aria-label={t('editor.code')} onClick={() => apply((e) => wrapSelection(e.view, '`'))}>
             <IconCode />
           </button>
+          <span className="dsh-notes-sep" />
+
+          {/* 4 列表 */}
+          <button type="button" className="dsh-notes-btn" title={t('editor.list')} aria-label={t('editor.list')} onClick={() => apply((e) => toggleLinePrefix(e.view, '- '))}>
+            <IconList />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.orderedList')} aria-label={t('editor.orderedList')} onClick={() => apply((e) => toggleLinePrefix(e.view, '1. '))}>
+            <IconOrderedList />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.taskList')} aria-label={t('editor.taskList')} onClick={() => apply((e) => toggleLinePrefix(e.view, '- [ ] '))}>
+            <IconTaskList />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.indent')} aria-label={t('editor.indent')} onClick={() => apply((e) => toggleIndent(e.view, false))}>
+            <IconIndent />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.outdent')} aria-label={t('editor.outdent')} onClick={() => apply((e) => toggleIndent(e.view, true))}>
+            <IconOutdent />
+          </button>
+          <span className="dsh-notes-sep" />
+
+          {/* 5 块 */}
+          <button type="button" className="dsh-notes-btn" title={t('editor.quote')} aria-label={t('editor.quote')} onClick={() => apply((e) => toggleLinePrefix(e.view, '> '))}>
+            <IconQuote />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.codeBlock')} aria-label={t('editor.codeBlock')} onClick={() => apply((e) => insertCodeFence(e.view))}>
+            <IconCodeBlock />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.hr')} aria-label={t('editor.hr')} onClick={() => apply((e) => insertHorizontalRule(e.view))}>
+            <IconHr />
+          </button>
+          <span className="dsh-notes-sep" />
+
+          {/* 6 插入:需要参数的三条走弹层 */}
+          <button
+            type="button"
+            className="dsh-notes-btn"
+            title={t('editor.link')}
+            aria-label={t('editor.link')}
+            aria-haspopup="dialog"
+            aria-expanded={popover === 'link'}
+            onClick={(event) => openPopover('link', event.currentTarget, selectionText())}
+          >
+            <IconLink />
+          </button>
           <button type="button" className="dsh-notes-btn" title={t('editor.image')} aria-label={t('editor.image')} onClick={() => apply((e) => insertImageSnippet(e.view))}>
             <IconImage />
           </button>
+          <button
+            type="button"
+            className="dsh-notes-btn"
+            title={t('editor.table')}
+            aria-label={t('editor.table')}
+            aria-haspopup="dialog"
+            aria-expanded={popover === 'table'}
+            onClick={(event) => openPopover('table', event.currentTarget)}
+          >
+            <IconTable />
+          </button>
+          <button
+            type="button"
+            className="dsh-notes-btn"
+            title={t('editor.math')}
+            aria-label={t('editor.math')}
+            aria-haspopup="dialog"
+            aria-expanded={popover === 'math'}
+            onClick={(event) => openPopover('math', event.currentTarget)}
+          >
+            <IconMath />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.wikiLink')} aria-label={t('editor.wikiLink')} onClick={() => apply((e) => insertWikiLinkSnippet(e.view))}>
+            <IconWikiLink />
+          </button>
+          <span className="dsh-notes-sep" />
+
+          {/* 7 视图 */}
           <button
             type="button"
             className="dsh-notes-btn"
@@ -306,6 +514,119 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
             <IconCheck />
           </button>
         </span>
+
+        {/* 标题级别 */}
+        {popover === 'heading' ? (
+          <div className="dsh-notes-popover" role="menu" aria-label={t('editor.headingMenu')} style={{ left: popoverLeft }}>
+            {[0, 1, 2, 3, 4, 5, 6].map((level) => (
+              <button
+                key={level}
+                type="button"
+                role="menuitem"
+                className="dsh-notes-popover-item"
+                onClick={() => apply((e) => setHeading(e.view, level))}
+              >
+                {level === 0 ? t('editor.bodyText') : `H${level}`}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {/* 链接:文字 + URL,回车即插入 */}
+        {popover === 'link' ? (
+          <div className="dsh-notes-popover dsh-notes-popover-form" role="dialog" aria-label={t('editor.link')} style={{ left: popoverLeft }}>
+            <input
+              className="dsh-notes-input dsh-notes-popover-input"
+              autoFocus
+              value={linkText}
+              placeholder={t('editor.linkText')}
+              aria-label={t('editor.linkText')}
+              onChange={(event) => setLinkText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                confirmLink()
+              }}
+            />
+            <input
+              className="dsh-notes-input dsh-notes-popover-input"
+              value={linkUrl}
+              placeholder={t('editor.linkUrl')}
+              aria-label={t('editor.linkUrl')}
+              onChange={(event) => setLinkUrl(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                confirmLink()
+              }}
+            />
+            <div className="dsh-notes-popover-row">
+              <button type="button" className="dsh-notes-btn" onClick={confirmLink}>
+                {t('editor.confirm')}
+              </button>
+              <button type="button" className="dsh-notes-btn" onClick={() => setPopover(null)}>
+                {t('editor.cancel')}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* 表格:拖动网格选行×列(最多 6×8) */}
+        {popover === 'table' ? (
+          <div className="dsh-notes-popover" role="dialog" aria-label={t('editor.table')} style={{ left: popoverLeft }}>
+            <div className="dsh-notes-popover-label">
+              {tablePick === null
+                ? t('editor.tableHint')
+                : t('editor.tableSize').replace('{r}', String(tablePick.rows)).replace('{c}', String(tablePick.cols))}
+            </div>
+            <div className="dsh-notes-grid" onMouseLeave={() => setTablePick(null)}>
+              {Array.from({ length: TABLE_ROWS }, (_, row) => (
+                <div className="dsh-notes-grid-row" key={row}>
+                  {Array.from({ length: TABLE_COLS }, (_, col) => (
+                    <button
+                      key={col}
+                      type="button"
+                      className={`dsh-notes-grid-cell${
+                        tablePick !== null && row < tablePick.rows && col < tablePick.cols ? ' dsh-notes-grid-cell-on' : ''
+                      }`}
+                      aria-label={`${row + 1} × ${col + 1}`}
+                      onMouseEnter={() => setTablePick({ rows: row + 1, cols: col + 1 })}
+                      onFocus={() => setTablePick({ rows: row + 1, cols: col + 1 })}
+                      onClick={() => apply((e) => insertTable(e.view, row + 1, col + 1))}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* 公式:TeX + 行内/块级;回车默认插入行内 */}
+        {popover === 'math' ? (
+          <div className="dsh-notes-popover dsh-notes-popover-form" role="dialog" aria-label={t('editor.math')} style={{ left: popoverLeft }}>
+            <input
+              className="dsh-notes-input dsh-notes-popover-input"
+              autoFocus
+              value={mathTex}
+              placeholder={t('editor.mathTex')}
+              aria-label={t('editor.mathTex')}
+              onChange={(event) => setMathTex(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                confirmMath(false)
+              }}
+            />
+            <div className="dsh-notes-popover-row">
+              <button type="button" className="dsh-notes-btn" onClick={() => confirmMath(false)}>
+                {t('editor.mathInline')}
+              </button>
+              <button type="button" className="dsh-notes-btn" onClick={() => confirmMath(true)}>
+                {t('editor.mathBlock')}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {notice !== null ? <div className="dsh-notes-notice">{notice}</div> : null}

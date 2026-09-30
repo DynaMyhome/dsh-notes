@@ -33,7 +33,17 @@ import {
   type TreeRef,
   type TreeUnfiled,
 } from './api'
-import { EditorPane } from './EditorPane'
+import { EditorArea } from './EditorArea'
+import {
+  emptyLayout,
+  loadLayout,
+  openTab,
+  pruneTabs,
+  saveLayout,
+  tabKeyOf,
+  type LayoutState,
+  type NoteTab,
+} from './editor/tabs'
 import { OutlinePane, type OutlineItem } from './OutlinePane'
 import { QuickOpen } from './QuickOpen'
 import { CandidatesPanel } from './CandidatesPanel'
@@ -71,8 +81,120 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
-  const [selected, setSelected] = useState<TreeNote | null>(null)
-  const [selectedRef, setSelectedRef] = useState<TreeRef | null>(null)
+  /** 当前笔记区域在看哪个工作区(null = 会话自己的工作区)。 */
+  const [workspaceKey, setWorkspaceKey] = useState<string | null>(null)
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([])
+  const [wsMenu, setWsMenu] = useState(false)
+  const [wsDraft, setWsDraft] = useState('')
+
+  /**
+   * 标签/分栏布局(按工作区持久化;切换工作区各用各的)。
+   *
+   * 初值**不能**读 `workspaceKey` —— 那个 state 在上面还没声明,初始化器先跑会命中
+   * TDZ(`Cannot access 'workspaceKey' before initialization`,实测整个面板渲染失败)。
+   * 真实布局由下面 `[layoutKey]` 的 effect 挂载后立即载入。
+   */
+  const [layout, setLayoutState] = useState<LayoutState>(emptyLayout)
+  const [activePane, setActivePane] = useState<'p1' | 'p2'>('p1')
+  /** 新建笔记后等树刷新再打开它(创建响应只有 id,没有 path/title)。 */
+  const [pendingOpen, setPendingOpen] = useState<string | null>(null)
+  const layoutKey = workspaceKey ?? 'session'
+
+  const applyLayout = useCallback(
+    (next: LayoutState) => {
+      setLayoutState(next)
+      saveLayout(layoutKey, next)
+    },
+    [layoutKey],
+  )
+
+  // 切换工作区 → 换一套布局(各自独立,互不干扰)
+  useEffect(() => {
+    const loaded = typeof window === 'undefined' ? emptyLayout() : loadLayout(layoutKey)
+    setLayoutState(loaded)
+    setActivePane(loaded.activePane)
+  }, [layoutKey])
+
+  /** 当前栏 + 当前标签(其余都是派生值,方便老代码继续用 `selected`)。 */
+  const currentPane = layout.panes.find((item) => item.id === activePane) ?? layout.panes[0]
+  const activeTab: NoteTab | null = currentPane?.tabs.find((tab) => tab.key === currentPane.active) ?? null
+  const selected: TreeNote | null =
+    activeTab !== null && activeTab.ref !== true
+      ? { id: activeTab.noteId, title: activeTab.title, path: activeTab.path, relPath: activeTab.path, collectionId: null, pinned: false }
+      : null
+  const selectedRef: TreeRef | null =
+    activeTab !== null && activeTab.ref === true
+      ? {
+          noteId: activeTab.noteId,
+          title: activeTab.title,
+          path: activeTab.path,
+          relPath: activeTab.path,
+          workspaceKey: activeTab.workspaceKey,
+          workspaceName: '',
+          collectionId: null,
+        }
+      : null
+
+  /** 打开一篇笔记:`reuse` 替换当前标签 / `tab` 新标签 / `split` 进第 2 栏。 */
+  const openNote = useCallback(
+    (note: TreeNote, mode: 'reuse' | 'tab' | 'split' = 'reuse', ref?: TreeRef) => {
+      const tab: NoteTab = {
+        key: tabKeyOf(layoutKey, note.id),
+        workspaceKey: ref?.workspaceKey ?? layoutKey,
+        noteId: note.id,
+        path: note.path,
+        title: note.title,
+        ...(ref === undefined ? {} : { ref: true as const }),
+      }
+      setLayoutState((current) => {
+        const next = openTab(current, tab, { mode })
+        saveLayout(layoutKey, next)
+        return next
+      })
+      setActivePane(mode === 'split' ? 'p2' : activePane)
+    },
+    [activePane, layoutKey],
+  )
+
+  /**
+   * 老代码里的 `setSelected(null)` = 清空编辑区;`setSelected(note)` = 在当前标签打开它。
+   * 保留这个薄壳可以让生命周期/删除/改名那些分支不用改。
+   */
+  const setSelected = useCallback(
+    (next: TreeNote | null) => {
+      if (next === null) {
+        applyLayout(emptyLayout())
+        return
+      }
+      openNote(next, 'reuse')
+    },
+    [applyLayout, openNote],
+  )
+
+  /** 树刷新后:把标签的标题/路径同步成新的,并把索引里没有的笔记摘掉。 */
+  const syncLayout = useCallback(
+    (next: Tree) => {
+      setLayoutState((current) => {
+        const renamed = {
+          ...current,
+          panes: current.panes.map((pane) => ({
+            ...pane,
+            tabs: pane.tabs.map((tab) => {
+              if (tab.ref === true) return tab
+              const note = next.notes.find((item) => item.id === tab.noteId)
+              return note === undefined ? tab : { ...tab, title: note.title, path: note.path }
+            }),
+          })),
+        }
+        const refKeys = new Set(renamed.panes.flatMap((pane) => pane.tabs.filter((tab) => tab.ref === true).map((tab) => tab.key)))
+        const alive = new Set(next.notes.map((note) => tabKeyOf(layoutKey, note.id)))
+        const pruned = pruneTabs(renamed, (key) => alive.has(key) || refKeys.has(key))
+        saveLayout(layoutKey, pruned)
+        return pruned
+      })
+    },
+    [layoutKey],
+  )
   const [compose, setCompose] = useState<ComposeMode | null>(null)
   /** 新建时的目标分类(右键「在此新建」/ 工具栏 ＋ 用)。 */
   const [composeParent, setComposeParent] = useState<string | null>(null)
@@ -95,11 +217,6 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [filesScan, setFilesScan] = useState<FileScan | null>(null)
   const [filesLoading, setFilesLoading] = useState(false)
   const [filesError, setFilesError] = useState<string | null>(null)
-  /** 当前笔记区域在看哪个工作区(null = 会话自己的工作区)。 */
-  const [workspaceKey, setWorkspaceKey] = useState<string | null>(null)
-  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([])
-  const [wsMenu, setWsMenu] = useState(false)
-  const [wsDraft, setWsDraft] = useState('')
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([])
   const [trashRoot, setTrashRoot] = useState('')
   const [trashLoading, setTrashLoading] = useState(false)
@@ -114,8 +231,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       if (kind === 'note') {
         run('create', { title: t('status.untitled'), collectionId: selected?.collectionId ?? null }, (note?: { id?: string }) => {
           if (typeof note?.id === 'string') {
-            setSelected(note as never)
-            setSelectedRef(null)
+            setPendingOpen(note.id)
             setRenamingKey(`n:${note.id}`)
           }
         })
@@ -158,10 +274,14 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         const next = await fetchTree(sessionId, force)
         setTree(next)
         setError(null)
-        setSelected((current) => {
-          if (current === null) return current
-          return next.notes.find((note) => note.id === current.id) ?? null
-        })
+        syncLayout(next)
+        if (pendingOpen !== null) {
+          const created = next.notes.find((note) => note.id === pendingOpen)
+          if (created !== undefined) {
+            openNote(created, 'reuse')
+            setPendingOpen(null)
+          }
+        }
         return next
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught))
@@ -347,8 +467,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       setActiveWorkspace(key)
       setWorkspaceKey(key)
       setWsMenu(false)
-      setSelected(null)
-      setSelectedRef(null)
+      // 不在这里清空调布局:每个工作区有自己的标签布局(layoutKey 变化时由 effect 载入),
+      // 切回来时应该看到原来的标签,而不是被清空。
       setFilesScan(null)
       if (sessionId !== '') {
         try {
@@ -523,7 +643,6 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           await ignorePaths(sessionId, { paths: [note.relPath] })
           if (selected?.id === note.id) {
             setSelected(null)
-            setSelectedRef(null)
           }
           await refresh()
           if (filesOpen) await loadFiles(true)
@@ -568,7 +687,6 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           await trashNote(sessionId, note.id)
           if (selected?.id === note.id) {
             setSelected(null)
-            setSelectedRef(null)
           }
           setStatus(t('status.trashed').replace('{p}', note.title))
           await refresh(true)
@@ -695,8 +813,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       const existing = tree?.notes.find((note) => note.title === title)
       if (existing !== undefined) {
         setSelected(existing)
-        setSelectedRef(null)
-        return
+          return
       }
       setStatus(`${title} · ${t('status.wikiMissing')}`)
     },
@@ -844,7 +961,6 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           notes={tree?.notes ?? []}
           onPick={(note) => {
             setSelected(note)
-            setSelectedRef(null)
           }}
           onClose={() => setQuickOpen(false)}
         />
@@ -977,14 +1093,21 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     onRenameCollection={commitCollectionRename}
                     onCancelRename={() => setRenamingKey(null)}
                     onStartRename={(key) => setRenamingKey(key)}
-                    onSelectNote={(note) => {
-                      setSelected(note)
-                      setSelectedRef(null)
-                    }}
-                    onSelectRef={(ref) => {
-                      setSelectedRef(ref)
-                      setSelected(null)
-                    }}
+                    onSelectNote={(note, mode) => openNote(note, mode ?? 'reuse')}
+                    onSelectRef={(ref) =>
+                      openNote(
+                        {
+                          id: ref.noteId,
+                          title: ref.title,
+                          path: ref.path,
+                          relPath: ref.relPath,
+                          collectionId: null,
+                          pinned: false,
+                        },
+                        'reuse',
+                        ref,
+                      )
+                    }
                     onFileAction={onFileAction}
                     onMoveNote={onMoveNote}
                     onMoveCollection={onMoveCollection}
@@ -1081,28 +1204,21 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           </div>
         )}
         <section className="dsh-notes-editor">
-          {selectedRef !== null ? (
-            <div className="dsh-notes-placeholder">
-              <div className="dsh-notes-placeholder-title">{selectedRef.title}</div>
-              <div className="dsh-notes-dim">{t('editor.refFrom').replace('{name}', selectedRef.workspaceName)}</div>
-              <div className="dsh-notes-dim dsh-notes-mono">{selectedRef.relPath}</div>
-            </div>
-          ) : selected !== null ? (
-            <EditorPane
-              key={selected.id}
-              t={t}
-              sessionId={sessionId}
-              note={selected}
-              onOutline={setOutline}
-              onCursorLine={setCursorLine}
-              onWikiLink={onWikiLink}
-              getKnownTitles={knownTitles}
-              outlineMove={outlineMove}
-              jumpTo={jump}
-            />
-          ) : (
-            <div className="dsh-notes-empty">{t('editor.noSelection')}</div>
-          )}
+          <EditorArea
+            t={t}
+            sessionId={sessionId}
+            layout={layout}
+            onLayout={applyLayout}
+            onOutline={setOutline}
+            onCursorLine={setCursorLine}
+            jumpTo={jump}
+            outlineMove={outlineMove}
+            onWikiLink={onWikiLink}
+            getKnownTitles={knownTitles}
+            activePane={activePane}
+            onFocusPane={setActivePane}
+            onQuickOpen={() => setQuickOpen(true)}
+          />
         </section>
       </div>
     </div>

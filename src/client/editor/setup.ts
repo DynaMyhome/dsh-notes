@@ -40,7 +40,16 @@ import {
   type CompletionContext,
   type CompletionResult,
 } from '@codemirror/autocomplete'
-import { defaultKeymap, history, historyKeymap, indentLess, indentMore, indentWithTab } from '@codemirror/commands'
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentLess,
+  indentMore,
+  indentWithTab,
+  redo,
+  undo,
+} from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import {
   deleteMarkupBackward,
@@ -55,6 +64,7 @@ import { tags as tag } from '@lezer/highlight'
 import { moveSection as moveSectionText } from '../../../lib/section.js'
 import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
 import { decorateFromTree } from './decorate'
+import { resolveImageUrl } from './media'
 import { tableBlocks, tableTab } from './table'
 
 /** 行内隐藏/标记装饰。 */
@@ -144,36 +154,6 @@ const HEADING_LINES: Record<string, string> = {
   SetextHeading2: 'h2',
 }
 
-/**
- * 解析图片地址:本地相对路径 → 宿主同源 `api/file?path=`。
- * @param documentPath - 当前笔记的绝对路径(用于解析相对路径)。
- * @param destination - md 里写的地址。
- * @returns 可用于 `<img src>` 的地址,或 undefined。
- */
-export function resolveImageUrl(documentPath: string | null, destination: string): string | undefined {
-  const raw = String(destination ?? '').trim()
-  if (raw === '') return undefined
-  if (/^https?:\/\//i.test(raw) || raw.startsWith('data:')) return raw
-  const cleaned = raw.replace(/^<|>$/g, '').split(/[?#]/)[0]
-  if (cleaned === '') return undefined
-  const isAbsolute = /^[a-zA-Z]:[\\/]/.test(cleaned) || cleaned.startsWith('/')
-  let absolute = cleaned.replace(/\\/g, '/')
-  if (!isAbsolute) {
-    if (documentPath === null) return undefined
-    const dir = documentPath.replace(/\\/g, '/').replace(/\/[^/]*$/, '')
-    absolute = `${dir}/${cleaned}`
-    // 归一化 ./ 与 ../
-    const parts: string[] = []
-    for (const segment of absolute.split('/')) {
-      if (segment === '.' || segment === '') continue
-      if (segment === '..') parts.pop()
-      else parts.push(segment)
-    }
-    absolute = `${absolute.startsWith('/') ? '/' : ''}${parts.join('/')}`
-  }
-  const query = absolute.replace(/^<|>$/g, '')
-  return `api/file?path=${encodeURIComponent(query)}`
-}
 
 /** 无序列表的项目符号(`-`/`*`/`+` → `•`,和 Typora 一致)。 */
 class BulletWidget extends WidgetType {
@@ -1177,5 +1157,122 @@ export function toggleLinePrefix(view: EditorView, prefix: string): void {
       : { from: line.from, to: line.from, insert: prefix },
   )
   view.dispatch({ changes })
+  view.focus()
+}
+
+/* ------------------------------------------------------------------ *
+ * 工具栏命令(P5:对齐 obsidian-editing-toolbar 的命令集)
+ *
+ * 约定(与上面的 wrapSelection/toggleLinePrefix 一致):
+ *   - 有选区 → 对选区生效;空选区 → 插入标记/占位符并把光标停在"该打字的地方";
+ *   - 每个命令自己 `view.focus()` —— 工具栏是 DOM 按钮,点一下会抢走编辑器焦点,
+ *     不还回去的话用户点完按钮敲键盘就是在跟按钮较劲。
+ * ------------------------------------------------------------------ */
+
+/**
+ * 插入一个**自成一段**的块(围栏 / 表格 / 分隔线…)。
+ *
+ * 为什么不直接在光标处拼字符串:块级语法必须独占行,光标在行中间时直接插入会把
+ * 原来那一行劈成两半(`abc|def` 插表格 → `abc|  |  |…|def`),产出的 markdown 是坏的。
+ * 所以按光标前后是否还有文字,各自补一个换行。
+ *
+ * @param block - 块正文本身(不含补出来的换行)。
+ * @param caretFromStart - 插入后光标相对 `block` 起点的偏移。
+ */
+function insertBlockAt(view: EditorView, block: string, caretFromStart: number): void {
+  const range = view.state.selection.main
+  const line = view.state.doc.lineAt(range.from)
+  const before = line.text.slice(0, range.from - line.from).trim().length > 0 ? '\n' : ''
+  const after = line.text.slice(range.to - line.from).trim().length > 0 ? '\n' : ''
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: before + block + after },
+    selection: { anchor: range.from + before.length + caretFromStart },
+  })
+  view.focus()
+}
+
+/** 撤销(`@codemirror/commands` 的 undo + 把焦点还给编辑器)。 */
+export function historyUndo(view: EditorView): void {
+  undo(view)
+  view.focus()
+}
+
+/** 重做。 */
+export function historyRedo(view: EditorView): void {
+  redo(view)
+  view.focus()
+}
+
+/** 增加 / 减少缩进(表格内 Tab 走 tableTab,这里只负责行首缩进)。 */
+export function toggleIndent(view: EditorView, out: boolean): void {
+  if (out) indentLess(view)
+  else indentMore(view)
+  view.focus()
+}
+
+/** 代码块:无语言围栏;有选区就整段搬进围栏,空选区光标停在第 2 行。 */
+export function insertCodeFence(view: EditorView): void {
+  const range = view.state.selection.main
+  const selected = view.state.sliceDoc(range.from, range.to)
+  insertBlockAt(view, '```\n' + selected + '\n```', 4)
+}
+
+/** 分隔线:独占一行;插入后光标落到下一行开头,可以接着写。 */
+export function insertHorizontalRule(view: EditorView): void {
+  insertBlockAt(view, '---\n', 4)
+}
+
+/** 链接:`[文字](url)`;URL 为空时光标停在括号里(`[](|)`),直接粘地址。 */
+export function insertLink(view: EditorView, label: string, url: string): void {
+  const range = view.state.selection.main
+  const text = label.length > 0 ? label : view.state.sliceDoc(range.from, range.to)
+  const snippet = `[${text}](${url})`
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: snippet },
+    selection: { anchor: range.from + (url.length === 0 ? snippet.length - 1 : snippet.length) },
+  })
+  view.focus()
+}
+
+/**
+ * 表格:`rows` 含表头一行(与选择器上"几行"的直觉一致),`cols` 为列数。
+ * 表头/分隔行是必须的 —— 少了 `| --- |` 就不是表格,而是一堆竖线。
+ */
+export function insertTable(view: EditorView, rows: number, cols: number): void {
+  const r = Math.max(1, Math.min(12, Math.round(rows)))
+  const c = Math.max(1, Math.min(12, Math.round(cols)))
+  const line = (cells: string[]): string => `| ${cells.join(' | ')} |`
+  const blank = line(Array.from({ length: c }, () => ''))
+  const body: string[] = [line(Array.from({ length: c }, () => '---'))]
+  for (let index = 1; index < r; index += 1) body.push(blank)
+  // 光标落在**第一个表头单元格**里,`| ` 之后就是内容起点
+  insertBlockAt(view, [blank, ...body].join('\n'), 2)
+}
+
+/** 公式:行内 `$…$` / 块级 `$$…$$`;TeX 为空时插入空壳并把光标放进去。 */
+export function insertMath(view: EditorView, tex: string, block: boolean): void {
+  if (block) {
+    insertBlockAt(view, `$$\n${tex}\n$$`, 3)
+    return
+  }
+  const range = view.state.selection.main
+  const source = tex.length > 0 ? tex : view.state.sliceDoc(range.from, range.to)
+  const snippet = `$${source}$`
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: snippet },
+    selection: { anchor: range.from + (source.length === 0 ? 1 : snippet.length) },
+  })
+  view.focus()
+}
+
+/** 双链:`[[标题]]`;有选区就包住选区,空选区光标停在 `[[` 之后。 */
+export function insertWikiLinkSnippet(view: EditorView): void {
+  const range = view.state.selection.main
+  const selected = view.state.sliceDoc(range.from, range.to)
+  const snippet = `[[${selected}]]`
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: snippet },
+    selection: { anchor: range.from + (selected.length === 0 ? 2 : snippet.length) },
+  })
   view.focus()
 }
