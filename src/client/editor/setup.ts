@@ -757,14 +757,17 @@ const theme = EditorView.theme({
   },
   // 表格单元格就地编辑的输入框
   '.dsh-cm-table-input': {
-    width: '100%',
     boxSizing: 'border-box',
+    minWidth: '0',
     border: '1px solid var(--dsw-alias-brand-primary)',
-    borderRadius: '4px',
-    padding: '1px 4px',
+    borderRadius: '3px',
+    padding: '0 3px',
+    margin: '0',
     font: 'inherit',
+    lineHeight: 'inherit',
     background: 'var(--dsw-alias-bg-base)',
     color: 'var(--dsw-alias-label-primary)',
+    verticalAlign: 'baseline',
   },
   '.dsh-cm-table-delim': { color: 'var(--dsw-alias-label-secondary)', opacity: '.45' },
   '.dsh-cm-table-head': {
