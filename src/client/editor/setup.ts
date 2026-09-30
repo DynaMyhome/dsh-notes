@@ -683,8 +683,16 @@ const theme = EditorView.theme({
   },
   '.dsh-cm-code-line': {
     fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)',
+    // 与卡片正文**同一套行度量**:卡片态 N 行代码占 N×20.24px,还原态也是 ——
+    // 两边不一致的话,"展开源码 ↔ 收起成卡片"会随行数累积出几十像素的高度差。
+    fontSize: '0.92em',
+    lineHeight: '1.63',
     background: 'var(--dsw-alias-bg-layer-1)',
   },
+  // 还原态的两行围栏:补上卡片 chrome(顶栏 6px 外边距 + 正文 8px 内边距 ……)
+  // 占掉的高度,使两种状态**整块等高**。数值是按实测高度反推的,改卡片样式要一起改。
+  '.dsh-cm-code-open': { paddingTop: '6px', paddingBottom: '4px' },
+  '.dsh-cm-code-close': { paddingBottom: '9px' },
   '.dsh-cm-code-lang': {
     fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)',
     fontSize: '0.78em',
@@ -749,9 +757,13 @@ const theme = EditorView.theme({
     padding: '8px 12px',
     overflow: 'auto',
     fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)',
-    fontSize: '0.9em',
-    lineHeight: '1.6',
+    // 与 `.dsh-cm-code-line`(还原态源码行)逐像素一致,见那里的注释
+    fontSize: '0.92em',
+    lineHeight: '1.63',
   },
+  // 浏览器给 `<pre>` 的默认上下外边距(实测 1em ≈ 24px)会让卡片比源码态高一截,
+  // 展开/收起时下方内容就会跳 —— 必须清零。
+  '.dsh-cm-code-pre': { margin: '0' },
   // 代码高亮的 token 颜色。
   // 注意:这几个变量**必须是有定义的**(实测 --dsw-alias-label-success/warning/danger
   // 在本主题里是空的,写了等于没写,颜色会回落到继承值);brand-primary 在亮色主题里
@@ -792,20 +804,27 @@ const theme = EditorView.theme({
     letterSpacing: '.04em',
     textTransform: 'uppercase',
   },
-  // 表格单元格就地编辑的输入框
+  // 表格单元格就地编辑的输入框。
+  // **绝对定位铺满单元格**是刻意的:输入框一旦参与布局,它自己的边框/内边距就会把行
+  // 撑高、固有宽度会把列撑开(两个都是实测踩过的),展开编辑时下方内容还会跟着挪。
+  // 绝对定位后它对布局零影响 —— 不撑列、不撑行、不挪位,而且能把整格铺满(文字不再被裁)。
   '.dsh-cm-table-input': {
+    position: 'absolute',
+    inset: '0',
+    width: '100%',
+    height: '100%',
     boxSizing: 'border-box',
     minWidth: '0',
     border: '1px solid var(--dsw-alias-border-l2)',
-    borderRadius: '3px',
-    padding: '0 3px',
+    borderRadius: '0',
+    padding: '0 9px',
     margin: '0',
     font: 'inherit',
     lineHeight: 'inherit',
-    background: 'transparent',
+    background: 'var(--dsw-alias-bg-layer-1)',
     color: 'var(--dsw-alias-label-primary)',
-    verticalAlign: 'baseline',
     outline: 'none',
+    zIndex: '1',
   },
   '.dsh-cm-table-delim': { color: 'var(--dsw-alias-label-secondary)', opacity: '.45' },
   '.dsh-cm-table-head': {
@@ -823,6 +842,8 @@ const theme = EditorView.theme({
     maxWidth: '100%',
   },
   '.dsh-cm-table th, .dsh-cm-table td': {
+    // 给绝对定位的编辑输入框当定位参照(见 .dsh-cm-table-input)
+    position: 'relative',
     border: '1px solid var(--dsw-alias-border-l1)',
     padding: '3px 10px',
     textAlign: 'left',
