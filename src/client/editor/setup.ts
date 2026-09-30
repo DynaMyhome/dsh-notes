@@ -150,9 +150,6 @@ const HEADING_LINES: Record<string, string> = {
  * @param destination - md 里写的地址。
  * @returns 可用于 `<img src>` 的地址,或 undefined。
  */
-/** 最近一次 mousedown 的位置(用于区分「点击」与「拖选」)。 */
-let pressAt: { x: number; y: number } | null = null
-
 export function resolveImageUrl(documentPath: string | null, destination: string): string | undefined {
   const raw = String(destination ?? '').trim()
   if (raw === '') return undefined
@@ -909,58 +906,22 @@ export function createEditor(options: {
       livePreview(options.documentPath, options.getKnownTitles),
       // 块级装饰必须来自 StateField(CM6 禁止插件提供跨行替换):真表格 + 单元格交互
       tableBlocks(),
-      // 点击落点校正:
-      //   a) 内容区之外(下方空白/右侧留白)→ 光标落文末(Obsidian 手感);
-      //   b) 内容区内 → 按行盒中点判定行:浏览器默认取最近的文字位置,行高 1.7 时
-      //      指针在同一行里稍微下移就会跳到下一行(用户反馈很反逻辑)。
-      // 只纠正点击(位移 <4px),拖选一律不拦,避免破坏选词/选段。
+      // 点**内容区之外**的空白(下方留白 / 右侧留白)→ 光标落文末并聚焦(Obsidian 手感)。
+      //
+      // 教训:这里曾经还想顺手修"点行下半部会选到下一行",做法是在内容区内自己推算 y
+      // 再 posAtCoords。结果在行高不一致的地方(标题、代码块、空行)把光标丢到相邻行 ——
+      // 用户实测"点标题上面一行会跳到标题",而且是全局性的。内容区内的落点判定一律交回
+      // CM6 自己,不再自作聪明。
       EditorView.domEventHandlers({
-        mousedown(event) {
-          pressAt = { x: event.clientX, y: event.clientY }
-          return false
-        },
-        mouseup(event, view) {
-          const start = pressAt
-          pressAt = null
-          if (start === null) return false
-          if (Math.abs(event.clientY - start.y) > 4 || Math.abs(event.clientX - start.x) > 4) return false
+        mousedown(event, view) {
           const target = event.target as HTMLElement | null
           if (target === null) return false
-          // widget(表格/代码卡片/图片/复选框/项目符号)有自己的交互,不拦
+          // widget(表格/代码卡片/图片/复选框/项目符号)有自己的交互
           if (target.closest('.dsh-cm-table, .dsh-cm-code-card, .dsh-cm-image, .dsh-cm-task, .dsh-cm-bullet') !== null) return false
-          const content = view.contentDOM
-          const contentRect = content.getBoundingClientRect()
-          const outside =
-            event.clientY > contentRect.bottom ||
-            event.clientX > contentRect.right ||
-            event.clientY < contentRect.top ||
-            target.closest('.cm-content') === null
-          if (outside) {
-            view.dispatch({ selection: { anchor: view.state.doc.length } })
-            view.focus()
-            return true
-          }
-          // 用 elementFromPoint **精确命中指针所在的那一行**。
-          // (早先是遍历所有行的矩形来找,代码块这种"行背景连成一片"的区域会选错行 ——
-          //  实测点 `test、` 后面会被丢到块尾 `丢掉` 后面,怎么点都回不去。)
-          const hitLine = (document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null)?.closest(
-            '.cm-line',
-          ) as HTMLElement | null
-          if (hitLine === null) return false
-          // 关键:用**文字本身的矩形**取纵向中点,而不是行盒的中点。
-          // 行盒常常比文字高(行高 1.7、标题的 padding、代码块的额外高度),用行盒中点
-          // 时这个 y 已经落在文字带下方,浏览器会把位置解析到**下一行**
-          // (实测:点 `test、` 行会被丢到下一行 `丢掉`;标题那次的"跳行"同源)。
-          const textRange = document.createRange()
-          textRange.selectNodeContents(hitLine)
-          const textRect = textRange.getBoundingClientRect()
-          const y =
-            textRect.height > 0
-              ? textRect.top + textRect.height / 2
-              : hitLine.getBoundingClientRect().top + hitLine.getBoundingClientRect().height / 2
-          const pos = view.posAtCoords({ x: event.clientX, y })
-          if (pos === null) return false
-          view.dispatch({ selection: { anchor: pos } })
+          // 内容区内:不拦
+          if (target.closest('.cm-content') !== null) return false
+          event.preventDefault()
+          view.dispatch({ selection: { anchor: view.state.doc.length } })
           view.focus()
           return true
         },
