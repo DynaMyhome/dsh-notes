@@ -15,6 +15,8 @@ export interface NoteTab {
   workspaceKey: string
   noteId: string
   path: string
+  /** 工作区相对路径(引用载荷用;老布局里可能没有,刷新时会补上)。 */
+  relPath?: string
   title: string
   /** 跨工作区映射(只读占位,没有编辑器)。 */
   ref?: boolean
