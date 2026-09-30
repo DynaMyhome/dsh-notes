@@ -216,7 +216,7 @@ export async function saveNote(
   path: string,
   text: string,
   expectedVersion: string,
-): Promise<{ version: string; path: string }> {
+): Promise<{ version: string; path: string; restoredId?: boolean; text?: string }> {
   return call('save', { sessionId, path, text, expectedVersion })
 }
 

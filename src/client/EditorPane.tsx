@@ -21,6 +21,7 @@ import {
   wrapSelection,
   type EditorHandle,
 } from './editor/setup'
+import { initialAnchor } from './editor/frontmatter'
 import type { OutlineItem } from './OutlinePane'
 import { setSourceMode as applySourceMode } from './editor/mode'
 import {
@@ -80,6 +81,8 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   const [error, setError] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [conflict, setConflict] = useState<{ version: string; text: string | null } | null>(null)
+  /** 一次性提示(如「已恢复 dsh-note-id」),3 秒后自动消失。 */
+  const [notice, setNotice] = useState<string | null>(null)
   const [docPath, setDocPath] = useState<string | null>(null)
   const [length, setLength] = useState(0)
   /** 源码模式(Typora 式:默认预览,标记全隐藏;要看/改源码时切过来)。 */
@@ -97,6 +100,13 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       dirtyRef.current = false
       setSaveState('saved')
       setConflict(null)
+      // 身份标识被删/被改 → Host 已按索引写回:编辑区同步成磁盘内容,免得下一次
+      // 自动保存又把它删掉(用户看不到的"来回打架")。
+      if (result.restoredId === true && typeof result.text === 'string') {
+        editor.setDoc(result.text)
+        dirtyRef.current = false
+        setNotice(t('editor.idRestored'))
+      }
     } catch (caught) {
       if (caught instanceof RouteError && caught.code === 'FS_STALE_VERSION') {
         setConflict({ version: caught.currentVersion ?? '', text: caught.currentText ?? null })
@@ -171,6 +181,9 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
             void save()
           },
         })
+        // 光标别停在 frontmatter 里(否则"光标进去就展开"会让每次打开都摊开元数据)
+        const anchor = initialAnchor(loaded.text)
+        if (anchor > 0) editorRef.current?.view.dispatch({ selection: { anchor } })
         setStatus('ready')
       } catch (caught) {
         if (cancelled) return
@@ -223,6 +236,12 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     setConflict(null)
     await save()
   }, [conflict, save])
+
+  useEffect(() => {
+    if (notice === null) return undefined
+    const timer = window.setTimeout(() => setNotice(null), 3000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
 
   const apply = useCallback((action: (handle: EditorHandle) => void) => {
     const editor = editorRef.current
@@ -289,6 +308,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
         </span>
       </div>
 
+      {notice !== null ? <div className="dsh-notes-notice">{notice}</div> : null}
       {conflict !== null ? (
         <div className="dsh-notes-conflict">
           <IconWarn size={14} />

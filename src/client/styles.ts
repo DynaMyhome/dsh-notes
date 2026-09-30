@@ -130,6 +130,7 @@ export const CSS = [
   '.dsh-notes-editor-host{flex:1 1 auto;min-height:0;overflow:hidden;display:flex}',
   '.dsh-notes-editor-host .cm-editor{flex:1 1 auto;min-width:0}',
   '.dsh-notes-editor-status{display:flex;align-items:center;gap:8px;flex:0 0 auto;padding:3px 10px;font-size:11px;color:var(--dsw-alias-label-secondary);border-top:1px solid var(--dsw-alias-border-l1)}',
+  '.dsh-notes-notice{flex:0 0 auto;padding:4px 10px;font-size:12px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-bottom:1px solid var(--dsw-alias-border-l1)}',
   '.dsh-notes-conflict{display:flex;align-items:center;gap:8px;flex:0 0 auto;padding:5px 10px;font-size:12px;color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);border-bottom:1px solid var(--dsw-alias-border-l1)}',
   '.dsh-notes-conflict-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.dsh-notes-empty{display:flex;align-items:center;justify-content:center;flex:1 1 auto;padding:16px;text-align:center;font-size:13px;line-height:1.7;color:var(--dsw-alias-label-secondary)}',
