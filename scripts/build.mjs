@@ -43,7 +43,9 @@ const result = await build({
   sourcemap: false,
   // 编辑器(CodeMirror 6)内联进同一个 bundle:先把体验做通,
   // 之后若要拆 `require.async` 惰性分片(参考官方 documentpreview 的 client.pdf.js)再说。
-  minify: true,
+  // 排查运行时错误时可以 `DSH_NOTES_NO_MINIFY=1 npm run build` 拿到未压缩产物
+  // (压缩后的错误栈只剩 `Cannot access 'lr' before initialization` 这种信息)。
+  minify: process.env.DSH_NOTES_NO_MINIFY !== '1',
 })
 
 const body = result.outputFiles[0].text

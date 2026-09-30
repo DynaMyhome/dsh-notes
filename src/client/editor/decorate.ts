@@ -17,7 +17,7 @@ import { HIDE, LINE, MARK, WIDGET, decideDecorations } from '../../../lib/markdo
 import temml from 'temml'
 
 import { isSourceMode } from './mode'
-import { resolveImageUrl } from './setup'
+import { resolveImageUrl } from './media'
 
 /** 行装饰类名映射(与 setup.ts 的 theme 对应)。 */
 const LINE_CLASS: Record<string, string> = {

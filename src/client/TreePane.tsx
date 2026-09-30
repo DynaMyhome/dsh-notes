@@ -27,7 +27,8 @@ export interface TreePaneProps {
   loading: boolean
   error: string | null
   selectedId: string | null
-  onSelectNote: (note: TreeNote) => void
+  /** 打开笔记:`mode` 由修饰键决定(普通=替换当前标签,Ctrl/Cmd+点击=新标签)。 */
+  onSelectNote: (note: TreeNote, mode?: 'reuse' | 'tab') => void
   onSelectRef: (ref: TreeRef) => void
   onFileAction: (file: TreeUnfiled) => void
   /** 把笔记放到某分类的指定位置(`index` 省略 = 末尾)。 */
@@ -559,9 +560,11 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                   event.preventDefault()
                   applyDrop()
                 }}
-                onClick={() => {
+                onClick={(event) => {
+                  // Ctrl/Cmd+点击 = 在新标签打开(Obsidian 同款)
+                  const mode = event.metaKey || event.ctrlKey ? 'tab' : 'reuse'
                   if (row.kind === 'collection') toggle(row.key.slice(2))
-                  else if (row.kind === 'note' && row.target !== undefined) props.onSelectNote(row.target as TreeNote)
+                  else if (row.kind === 'note' && row.target !== undefined) props.onSelectNote(row.target as TreeNote, mode)
                   else if (row.kind === 'ref' && row.target !== undefined) props.onSelectRef(row.target as TreeRef)
                   else if (row.kind === 'unfiled' && row.target !== undefined) props.onFileAction(row.target as TreeUnfiled)
                   else if (row.kind === 'inbox') props.onOpenCandidates?.()
