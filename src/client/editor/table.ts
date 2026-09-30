@@ -263,10 +263,13 @@ export function buildTableDecorations(state: EditorState, sourceMode: boolean = 
       }
       // 表格:渲染成真 <table>(预览模式**永不翻回源码**,单元格就地编辑,见 TableWidget)
       if (node.name === 'Table') {
-        const source = state.doc.sliceString(node.from, node.to)
-        const model = parseTable(source, node.from)
+        // 范围必须夹到"最后一行含 | 的行":解析器的 Table 节点会把紧跟表格的那一行
+        // 也算进来,而这里是**整块 replace** → 那行文字会被隐藏(用户实测)。
+        const range = clampTableRange(state, node.from, node.to)
+        const source = state.doc.sliceString(range.from, range.to)
+        const model = parseTable(source, range.from)
         if (model.header.length === 0) return
-        ranges.push(Decoration.replace({ widget: new TableWidget(model, node.from), block: true }).range(node.from, node.to))
+        ranges.push(Decoration.replace({ widget: new TableWidget(model, range.from), block: true }).range(range.from, range.to))
         return
       }
       // 代码围栏:渲染成卡片(顶栏 = 语言 + 复制按钮,正文 = 等宽代码);
@@ -479,10 +482,30 @@ export function tableBlocks(sourceMode: boolean = isSourceMode()): Extension {
 function enclosingTable(state: EditorState, pos: number): { from: number; to: number } | null {
   let node = syntaxTree(state).resolveInner(pos, 1)
   while (node !== null) {
-    if (node.name === 'Table') return { from: node.from, to: node.to }
+    if (node.name === 'Table') return clampTableRange(state, node.from, node.to)
     node = node.parent
   }
   return null
+}
+
+/**
+ * 把语法树的 Table 节点范围**夹到真正的表格行**上。
+ *
+ * 为什么需要:解析器的 Table 节点会把"表格下面紧跟的那一行"也算进去,而我们的 widget 是
+ * **整块 replace**,于是那行文字被直接隐藏掉(用户实测:表格下写 `端到端`,渲染后它没了)。
+ * 表格行一定含 `|`,所以从末尾往前找到最后一个含 `|` 的行即可。
+ * @param state - 编辑器状态。
+ * @param from - 节点起点。
+ * @param to - 节点终点。
+ * @returns 夹好的范围。
+ */
+function clampTableRange(state: EditorState, from: number, to: number): { from: number; to: number } {
+  const text = state.doc.sliceString(from, to)
+  const lines = text.split('\n')
+  let last = lines.length - 1
+  while (last >= 0 && !lines[last].includes('|')) last -= 1
+  if (last < 0) return { from, to }
+  return { from, to: from + lines.slice(0, last + 1).join('\n').length }
 }
 
 /** 当前光标在哪个单元格(行优先展平后的下标)。 */
