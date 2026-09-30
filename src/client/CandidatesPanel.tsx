@@ -58,6 +58,15 @@ export function CandidatesPanel(props: CandidatesPanelProps): React.ReactElement
     searchRef.current?.focus()
   }, [])
 
+  // 点面板外面 / 按 Esc 都关掉(和菜单一样的手感)
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') props.onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [props])
+
   // 每次数据变了就清掉选择(选中的路径可能已经不在这批里了)
   useEffect(() => {
     setPicked(new Set())
@@ -108,7 +117,15 @@ export function CandidatesPanel(props: CandidatesPanelProps): React.ReactElement
   const pickedRel = pickedFiles.map((file) => file.relPath)
 
   return (
-    <div className="dsh-notes-panel-overlay" role="dialog" aria-label={t('files.title')}>
+    <div
+      className="dsh-notes-panel-overlay"
+      role="dialog"
+      aria-label={t('files.title')}
+      onMouseDown={(event) => {
+        // 只在点遮罩本身时关闭(点面板内部不关)
+        if (event.target === event.currentTarget) props.onClose()
+      }}
+    >
       <div className="dsh-notes-panel">
         <div className="dsh-notes-panel-head">
           <span className="dsh-notes-panel-title">{t('files.title')}</span>

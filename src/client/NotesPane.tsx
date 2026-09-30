@@ -954,30 +954,6 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       <button
         type="button"
         className="dsh-notes-btn"
-        title={t('action.rescan')}
-        aria-label={t('action.rescan')}
-        disabled={busy || loading}
-        onClick={() => {
-          void refresh(true).then((next) => setStatus(describeScan(next)))
-        }}
-      >
-        ⟳
-      </button>
-      <button
-        type="button"
-        className="dsh-notes-btn"
-        title={t('action.files')}
-        aria-label={t('action.files')}
-        onMouseDown={() => {
-          // 标签页里的按钮点击不该把编辑器/树的选择弄丢,所以用 mousedown 打开
-        }}
-        onClick={onOpenCandidates}
-      >
-        ⇥{filesScan !== null && filesScan.stats.candidates > 0 ? <span className="dsh-notes-count">{filesScan.stats.candidates}</span> : null}
-      </button>
-      <button
-        type="button"
-        className="dsh-notes-btn"
         title={t('action.trash')}
         aria-label={t('action.trash')}
         onClick={() => {
@@ -1295,14 +1271,11 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             <button
               type="button"
               className="dsh-notes-btn"
-              title={t('action.rescan')}
-              aria-label={t('action.rescan')}
-              disabled={busy || loading}
-              onClick={() => {
-                void refresh(true).then((next) => setStatus(describeScan(next)))
-              }}
+              title={t('action.files')}
+              aria-label={t('action.files')}
+              onClick={onOpenCandidates}
             >
-              ⟳
+              ⇥
             </button>
             <button
               type="button"

@@ -6,8 +6,7 @@
  * (`清空回收站` → 再确认一次),防误删。
  */
 
-import type React from 'react'
-import { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 
 import type { TrashEntry } from './api'
 
@@ -38,60 +37,37 @@ function stamp(at: number): string {
  * @param props - 见 {@link TrashPaneProps}。
  */
 export function TrashPane(props: TrashPaneProps): React.ReactElement {
+  // Esc 关闭(点外部在下面的遮罩上处理)
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') props.onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [props])
   const t = props.t
   const [confirmAll, setConfirmAll] = useState(false)
   const [confirmOne, setConfirmOne] = useState<string | null>(null)
 
   return (
     <div
-      style={{
-        position: 'absolute',
-        inset: '0',
-        zIndex: 70,
-        background: 'color-mix(in srgb, var(--dsw-alias-bg-base) 55%, transparent)',
-        display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'center',
-        paddingTop: '42px',
-      }}
+      className="dsh-notes-panel-overlay"
+      role="dialog"
+      aria-label={t('trash.title')}
       onMouseDown={(event) => {
+        // 点遮罩本身才关(点面板内部不关)
         if (event.target === event.currentTarget) props.onClose()
       }}
     >
-      <div
-        style={{
-          width: '92%',
-          maxWidth: '520px',
-          maxHeight: '70%',
-          display: 'flex',
-          flexDirection: 'column',
-          borderRadius: '10px',
-          border: '1px solid var(--dsw-alias-border-l2)',
-          background: 'var(--dsw-alias-bg-overlay)',
-          boxShadow: '0 16px 40px rgba(0,0,0,.28)',
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            flex: '0 0 auto',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '8px 10px',
-            borderBottom: '1px solid var(--dsw-alias-border-l1)',
-          }}
-        >
-          <span style={{ fontSize: '13px', fontWeight: 600 }}>{t('trash.title')}</span>
-          <span style={{ fontSize: '11px', color: 'var(--dsw-alias-label-secondary)' }}>
-            {t('trash.root').replace('{p}', props.root)}
-          </span>
-          <span style={{ flex: '1 1 auto' }} />
+      <div className="dsh-notes-panel dsh-notes-panel-sm">
+        <div className="dsh-notes-panel-head">
+          <span className="dsh-notes-panel-title">{t('trash.title')}</span>
+          <span className="dsh-notes-panel-stats">{t('trash.root').replace('{p}', props.root)}</span>
+          <span className="dsh-notes-spacer" />
           <button
             type="button"
-            className="dsh-notes-btn"
+            className={`dsh-notes-btn${confirmAll ? ' dsh-notes-trash-danger' : ''}`}
             disabled={props.entries.length === 0}
-            style={confirmAll ? { color: 'var(--dsw-alias-state-error-primary)' } : undefined}
             onClick={() => {
               if (!confirmAll) {
                 setConfirmAll(true)
@@ -107,53 +83,28 @@ export function TrashPane(props: TrashPaneProps): React.ReactElement {
             {t('trash.close')}
           </button>
         </div>
-        <div style={{ padding: '6px 10px', fontSize: '11px', lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary)' }}>
-          {t('trash.hint')}
-        </div>
-        <div style={{ flex: '1 1 auto', minHeight: '0', overflow: 'auto', padding: '2px 6px 8px' }}>
+
+        <div className="dsh-notes-panel-note">{t('trash.hint')}</div>
+
+        <div className="dsh-notes-trash-list">
           {props.loading ? (
-            <div style={{ padding: '10px', fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' }}>
-              {t('trash.loading')}
-            </div>
+            <div className="dsh-notes-dim dsh-notes-panel-pad">{t('trash.loading')}</div>
           ) : props.entries.length === 0 ? (
-            <div style={{ padding: '10px', fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' }}>
-              {t('trash.empty')}
-            </div>
+            <div className="dsh-notes-dim dsh-notes-panel-pad">{t('trash.empty')}</div>
           ) : (
             props.entries.map((entry) => (
-              <div
-                key={entry.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '5px 6px',
-                  borderBottom: '1px solid var(--dsw-alias-border-l1)',
-                }}
-              >
-                <span style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '12.5px' }}>
+              <div key={entry.id} className="dsh-notes-trash-row">
+                <span className="dsh-notes-trash-name">
                   {entry.title}
-                  {entry.exists ? null : (
-                    <span style={{ color: 'var(--dsw-alias-state-error-primary)', marginLeft: '6px', fontSize: '11px' }}>
-                      {t('trash.missing')}
-                    </span>
-                  )}
+                  {entry.exists ? null : <span className="dsh-notes-trash-danger" style={{ marginLeft: 6, fontSize: 11 }}>{t('trash.missing')}</span>}
                 </span>
-                <span style={{ flex: '0 0 auto', fontSize: '11px', color: 'var(--dsw-alias-label-secondary)' }}>
-                  {stamp(entry.deletedAt)}
-                </span>
-                <button
-                  type="button"
-                  className="dsh-notes-btn"
-                  disabled={!entry.exists}
-                  onClick={() => props.onRestore(entry)}
-                >
+                <span className="dsh-notes-trash-meta">{stamp(entry.deletedAt)}</span>
+                <button type="button" className="dsh-notes-btn" disabled={!entry.exists} onClick={() => props.onRestore(entry)}>
                   {t('trash.restore')}
                 </button>
                 <button
                   type="button"
-                  className="dsh-notes-btn"
-                  style={confirmOne === entry.id ? { color: 'var(--dsw-alias-state-error-primary)' } : undefined}
+                  className={`dsh-notes-btn${confirmOne === entry.id ? ' dsh-notes-trash-danger' : ''}`}
                   onClick={() => {
                     if (confirmOne !== entry.id) {
                       setConfirmOne(entry.id)
