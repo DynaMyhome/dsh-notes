@@ -331,7 +331,10 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     [run, t],
   )
 
-  /** 点 `[[双链]]`:对得上就打开,对不上就按该标题新建。 */
+  /**
+   * 点 `[[双链]]`:对得上就打开;**对不上什么都不创建**,只给一句提示
+   * (用户明确要求:未命中不要自动新建笔记)。
+   */
   const onWikiLink = useCallback(
     (title: string) => {
       const existing = tree?.notes.find((note) => note.title === title)
@@ -340,12 +343,9 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         setSelectedRef(null)
         return
       }
-      void run('create', { title, collectionId: selected?.collectionId ?? null }, (note) => {
-        setSelected(note)
-        setStatus(t('status.created'))
-      })
+      setStatus(`${title} · ${t('status.wikiMissing')}`)
     },
-    [run, selected, t, tree],
+    [t, tree],
   )
 
   /** 双链能否对上(给编辑器上色用)。 */

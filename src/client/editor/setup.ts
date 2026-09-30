@@ -616,7 +616,10 @@ const theme = EditorView.theme({
   },
   '.cm-scroller': {
     fontFamily: 'var(--dsw-font, inherit)',
-    lineHeight: '1.7',
+    // 行高 1.7 太松:行盒 23px 而文字只有 14px(上 3px/下 6px),点击的"同一行"区间
+    // 与视觉文字对不上,稍微下移就越界到下一行。收到 1.5 让行盒贴住文字
+    // (Obsidian/Typora 的默认行高也在这个量级)。
+    lineHeight: '1.5',
     // 内边距必须放**内容区里面**:放在 scroller 上时,那片空白不属于 .cm-content,
     // 点击不会落光标、鼠标也不是文本光标(实测 Obsidian 是 I 形且点了落到文末)。
     padding: '0',
