@@ -132,14 +132,6 @@ class BlockMathWidget extends WidgetType {
   }
 }
 
-/** `$$ … $$` 独占整段(可跨行)时,取出 TeX 正文;否则返回 null。 */
-function standaloneBlockMath(state: EditorState, from: number, to: number): string | null {
-  const text = state.doc.sliceString(from, to)
-  if (!/^\s*\$\$[\s\S]+\$\$\s*$/.test(text)) return null
-  const inner = text.replace(/^\s*\$\$/, '').replace(/\$\$\s*$/, '').trim()
-  return inner === '' ? null : inner
-}
-
 /** 真表格 widget:点单元格把光标送进去(那一行进入活动态 → 自动显示源码)。 */
 class TableWidget extends WidgetType {
   constructor(
@@ -263,17 +255,23 @@ export function buildTableDecorations(state: EditorState): DecorationSet {
   const ranges = []
   tree.iterate({
     enter: (node) => {
-      // 公式块 `$$ … $$`(独占整段,可跨行)→ 块级 widget。
-      // 必须在 StateField:插件层不能跨行替换(见 BlockMathWidget 注释)。
-      if (node.name === 'Paragraph') {
-        const tex = standaloneBlockMath(state, node.from, node.to)
-        if (tex !== null) {
-          if (!selectionTouches(state, node.from, node.to)) {
+      // 公式块 `$$ … $$`:**独占整行(可多行)就渲染成块级 widget,前后不必空行**。
+      // 必须在 StateField:插件层不能跨行替换。判据是"节点从行首开始、到行尾结束",
+      // 不能要求"整个 Paragraph 就是一个公式" —— `$$` 紧挨着正文时整段是一个
+      // Paragraph,那样会整块落空、原样显示(用户实测:必须前后空行才能渲染)。
+      if (node.name === 'BlockMath') {
+        const first = state.doc.lineAt(node.from)
+        const last = state.doc.lineAt(Math.max(node.from, node.to - 1))
+        const fromLineStart = state.doc.sliceString(first.from, node.from).trim() === ''
+        const toLineEnd = state.doc.sliceString(node.to, last.to).trim() === ''
+        const tex = state.doc.sliceString(node.from + 2, node.to - 2).trim()
+        if (fromLineStart && toLineEnd && tex !== '') {
+          if (!selectionTouches(state, first.from, last.to)) {
             ranges.push(
-              Decoration.replace({ widget: new BlockMathWidget(tex, node.from), block: true }).range(node.from, node.to),
+              Decoration.replace({ widget: new BlockMathWidget(tex, first.from), block: true }).range(first.from, last.to),
             )
           }
-          return false // 子节点不再处理(否则行内规则会在里面又加一层装饰)
+          return false // 子节点不再处理
         }
       }
       // 表格:渲染成真 <table>(预览模式**永不翻回源码**,单元格就地编辑,见 TableWidget)

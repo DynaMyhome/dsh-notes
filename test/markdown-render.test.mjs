@@ -186,9 +186,17 @@ test('公式:独占整段(含多行 `$$…$$`)不在决策层出 widget —— �
       selection: [{ from: text.length, to: text.length }],
       reveal: true,
     })
-  // 用户实测:`$$\na=1\n$$` 以前完全渲染不出来。这种独占整段的公式必须走 StateField
+  // 用户实测:`$$\na=1\n$$` 以前完全渲染不出来。这种独占整行的公式必须走 StateField
   // (插件层不能跨行替换),决策层这里就该**什么都不发**,否则会和块级 widget 重叠。
-  for (const text of ['$$\na=1\n$$\n', '$$x$$\n']) {
+  // 关键:**前后不必空行** —— 紧挨正文时整段是一个 Paragraph,以前正是这种形态落空
+  // (用户第二次实测:必须前后空行才渲染)。
+  for (const text of [
+    '$$\na=1\n$$\n',
+    '$$x$$\n',
+    '文字\n$$\na=1\n$$\n更多\n',
+    '$$\na=1\n$$\n1\n',
+    '  $$\na=1\n$$\n',
+  ]) {
     const descs = decideMath(text)
     assert.equal(only(descs, WIDGET).length, 0, `${JSON.stringify(text)} 不该在决策层出 widget`)
   }
