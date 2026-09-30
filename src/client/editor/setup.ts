@@ -1166,21 +1166,21 @@ export function createEditor(options: {
     // 必须先用 contains 判活,否则会把光标从代码块里踢出去。
     if (!view.dom.contains(target)) return
     if (view.contentDOM.contains(target)) {
-      // 点在正文里由 CM6 自己定位。但**带装饰的行**(`[[ ]]` 那层会改变行内布局)坐标会漂,
-      // 表现就是"鼠标在这一行、光标落到相邻行"。这里只对 `[[ ]]` 装饰做一次事后纠正:
-      // 用那层装饰自己的矩形中点重算位置;其它情况完全不插手(避免干扰拖选)。
-      const wiki = (target as HTMLElement | null)?.closest?.('.dsh-cm-wiki, .dsh-cm-wiki-new')
-      if (wiki !== null && wiki !== undefined) {
-        const rect = wiki.getBoundingClientRect()
-        const clientX = event.clientX
-        window.requestAnimationFrame(() => {
-          const fixed = view.posAtCoords({ x: clientX, y: rect.top + rect.height / 2 })
-          if (fixed === null) return
-          const current = view.state.selection.main
-          if (view.state.doc.lineAt(current.head).number !== view.state.doc.lineAt(fixed).number) {
+      // 点在正文里由 CM6 自己定位 —— 但它按"它认为的行布局"换算坐标,行高不一致时会
+      // 漂**一行**(用户实测:鼠标在 `端到端` 这一行,光标落到下一行)。
+      // 这里做一次**同步**纠正:用 elementFromPoint 命中的真实 `.cm-line` 复核,
+      // 行号不一致就用那一行的垂直中点重算。同步(不是下一帧)是为了不干扰随后的拖选;
+      // Shift 加选、右键、双击这些一概不插手。
+      if (event.button === 0 && !event.shiftKey && event.detail === 1) {
+        const domLine = (target as HTMLElement | null)?.closest?.('.cm-line') as HTMLElement | null
+        if (domLine !== null && domLine !== undefined) {
+          const rect = domLine.getBoundingClientRect()
+          const before = view.state.selection.main.head
+          const fixed = view.posAtCoords({ x: event.clientX, y: rect.top + rect.height / 2 })
+          if (fixed !== null && view.state.doc.lineAt(fixed).number !== view.state.doc.lineAt(before).number) {
             view.dispatch({ selection: { anchor: fixed } })
           }
-        })
+        }
       }
       return
     }
