@@ -777,6 +777,15 @@ const theme = EditorView.theme({
   '.dsh-cm-code-body .tok-invalid': { color: 'var(--dsw-alias-state-error-primary)' },
   '.dsh-cm-math': { padding: '0 1px' },
   '.dsh-cm-math math': { fontSize: '1.02em' },
+  // 块级公式(`$$ … $$` 独占整段):块级 widget —— 用 padding 不用 margin
+  // (margin 不进 CM6 的行高测量,会让后面所有行的落点整体偏移)
+  '.dsh-cm-math-block': {
+    display: 'block',
+    padding: '6px 0',
+    textAlign: 'center',
+    cursor: 'text',
+  },
+  '.dsh-cm-math-block math': { fontSize: '1.12em' },
   '.dsh-cm-code-input': {
     display: 'block',
     width: '100%',

@@ -19,6 +19,7 @@ import { jsxLanguage, tsxLanguage, javascript, javascriptLanguage, typescriptLan
 import { json, jsonLanguage } from '@codemirror/lang-json'
 import { python, pythonLanguage } from '@codemirror/lang-python'
 import { highlightTree, tagHighlighter, tags as tokenTags } from '@lezer/highlight'
+import temml from 'temml'
 
 /** 一个单元格:文本 + 它在**文档中的绝对范围**。 */
 export interface TableCell {
@@ -86,6 +87,58 @@ export function parseTable(source: string, base: number): TableModel {
 
 /** 当前打开的单元格输入框(切换单元格时用来避免互相抢焦点)。 */
 const openCellInputs = new Set<HTMLInputElement>()
+
+/**
+ * 块级公式 widget(独占整行的 `$$…$$`,含多行写法)。
+ *
+ * 为什么必须在这里(StateField):插件层只允许**行内**替换,`$$` 跨行会被 CM6 拒绝
+ * ("Decorations that replace line breaks may not be specified via plugins")。用户实测
+ * "`$$\na=1\n$$` 完全渲染不出来"就是因为这条路径以前根本没有。
+ */
+class BlockMathWidget extends WidgetType {
+  constructor(
+    readonly tex: string,
+    readonly from: number,
+  ) {
+    super()
+  }
+
+  eq(other: BlockMathWidget): boolean {
+    return other.tex === this.tex && other.from === this.from
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const box = document.createElement('div')
+    box.className = 'dsh-cm-math-block'
+    box.title = '点击展开源码'
+    try {
+      box.innerHTML = temml.renderToString(this.tex, { displayMode: true, throwOnError: false })
+    } catch {
+      box.textContent = this.tex
+    }
+    // 点公式 → 光标进入这一块 → 显示 `$$…$$` 源码(与其他块级对象一致)
+    box.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      view.dispatch({ selection: { anchor: Math.min(this.from, view.state.doc.length) } })
+      view.focus()
+    })
+    return box
+  }
+
+  ignoreEvent(): boolean {
+    // 自己处理 mousedown,不让 CM6 再接管
+    return true
+  }
+}
+
+/** `$$ … $$` 独占整段(可跨行)时,取出 TeX 正文;否则返回 null。 */
+function standaloneBlockMath(state: EditorState, from: number, to: number): string | null {
+  const text = state.doc.sliceString(from, to)
+  if (!/^\s*\$\$[\s\S]+\$\$\s*$/.test(text)) return null
+  const inner = text.replace(/^\s*\$\$/, '').replace(/\$\$\s*$/, '').trim()
+  return inner === '' ? null : inner
+}
 
 /** 真表格 widget:点单元格把光标送进去(那一行进入活动态 → 自动显示源码)。 */
 class TableWidget extends WidgetType {
@@ -210,6 +263,19 @@ export function buildTableDecorations(state: EditorState): DecorationSet {
   const ranges = []
   tree.iterate({
     enter: (node) => {
+      // 公式块 `$$ … $$`(独占整段,可跨行)→ 块级 widget。
+      // 必须在 StateField:插件层不能跨行替换(见 BlockMathWidget 注释)。
+      if (node.name === 'Paragraph') {
+        const tex = standaloneBlockMath(state, node.from, node.to)
+        if (tex !== null) {
+          if (!selectionTouches(state, node.from, node.to)) {
+            ranges.push(
+              Decoration.replace({ widget: new BlockMathWidget(tex, node.from), block: true }).range(node.from, node.to),
+            )
+          }
+          return false // 子节点不再处理(否则行内规则会在里面又加一层装饰)
+        }
+      }
       // 表格:渲染成真 <table>(预览模式**永不翻回源码**,单元格就地编辑,见 TableWidget)
       if (node.name === 'Table') {
         const source = state.doc.sliceString(node.from, node.to)

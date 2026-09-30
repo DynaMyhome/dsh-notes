@@ -101,22 +101,31 @@ class TaskWidget extends WidgetType {
   }
 }
 
-/** 行内图片(widget 只出现一次,点击即还原成源码)。 */
+/**
+ * 行内图片(widget 只出现一次,点击即还原成源码)。
+ *
+ * `from`/`to` 是它在文档里的范围:点一下就**把光标放进这个范围**,决策层随即
+ * 还原成 markdown 源码。没有这一条时,只有点到图片**右边那一点点**正文才有效
+ * (点图片本身 CM6 什么都不做)——用户实测"公式/图片点不动"就是这个原因。
+ */
 class ImageWidget extends WidgetType {
   constructor(
     readonly url: string,
     readonly alt: string,
+    readonly from: number,
+    readonly to: number,
   ) {
     super()
   }
 
   eq(other: ImageWidget): boolean {
-    return other.url === this.url && other.alt === this.alt
+    return other.url === this.url && other.alt === this.alt && other.from === this.from
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement('span')
     wrap.className = 'dsh-cm-image'
+    wrap.title = '点击展开源码'
     const img = document.createElement('img')
     img.src = this.url
     img.alt = this.alt
@@ -125,6 +134,7 @@ class ImageWidget extends WidgetType {
     caption.className = 'dsh-cm-image-caption'
     caption.textContent = this.alt
     wrap.append(img, caption)
+    clickToReveal(wrap, view, this.from)
     return wrap
   }
 
@@ -132,6 +142,16 @@ class ImageWidget extends WidgetType {
     // widget 内部有自己的交互(输入框/复选框),不让 CM6 再处理这些事件
     return true
   }
+}
+
+/** 把"点 widget = 光标进入它的范围"这件事收敛到一处(widget 自己派发,不依赖 CM6)。 */
+function clickToReveal(dom: HTMLElement, view: EditorView, from: number): void {
+  dom.addEventListener('mousedown', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    view.dispatch({ selection: { anchor: Math.min(from, view.state.doc.length) } })
+    view.focus()
+  })
 }
 
 /** 选区(标准化成 from <= to)。 */
@@ -187,12 +207,12 @@ export function decorateFromTree(
         const checked = description.data?.checked === true
         ranges.push(Decoration.replace({ widget: new TaskWidget(checked, from, to) }).range(from, to))
       } else if (description.widget === 'math') {
-        ranges.push(Decoration.replace({ widget: new MathWidget(String(description.data?.tex ?? '')) }).range(from, to))
+        ranges.push(Decoration.replace({ widget: new MathWidget(String(description.data?.tex ?? ''), from, to) }).range(from, to))
       } else if (description.widget === 'image') {
         const destination = String(description.data?.destination ?? '')
         const url = resolveImageUrl(documentPath, destination)
         if (url !== undefined) {
-          ranges.push(Decoration.replace({ widget: new ImageWidget(url, String(description.data?.alt ?? '')) }).range(from, to))
+          ranges.push(Decoration.replace({ widget: new ImageWidget(url, String(description.data?.alt ?? ''), from, to) }).range(from, to))
         }
       }
     }
@@ -226,22 +246,29 @@ export function treeDecorations(documentPath: string | null, getKnownTitles?: ()
  * 这里选 Temml 而不是 KaTeX 的原因:KaTeX 依赖自带字体文件,插件里没法可靠提供)。
  */
 class MathWidget extends WidgetType {
-  constructor(readonly tex: string) {
+  constructor(
+    readonly tex: string,
+    readonly from: number,
+    readonly to: number,
+  ) {
     super()
   }
 
   eq(other: MathWidget): boolean {
-    return other.tex === this.tex
+    return other.tex === this.tex && other.from === this.from
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const span = document.createElement('span')
     span.className = 'dsh-cm-math'
+    span.title = '点击展开源码'
     try {
       span.innerHTML = temml.renderToString(this.tex, { throwOnError: false })
     } catch {
       span.textContent = this.tex
     }
+    // 点公式任意位置 → 光标进入公式范围 → 决策层还原成 `$…$` 源码
+    clickToReveal(span, view, this.from)
     return span
   }
 

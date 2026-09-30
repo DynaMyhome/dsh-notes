@@ -10,10 +10,24 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
-import { call, fetchTree, importNote, type Tree, type TreeNote, type TreeRef, type TreeUnfiled } from './api'
+import {
+  call,
+  fetchTrash,
+  fetchTree,
+  importNote,
+  purgeTrash,
+  restoreTrash,
+  trashNote,
+  type TrashEntry,
+  type Tree,
+  type TreeNote,
+  type TreeRef,
+  type TreeUnfiled,
+} from './api'
 import { EditorPane } from './EditorPane'
 import { OutlinePane, type OutlineItem } from './OutlinePane'
 import { QuickOpen } from './QuickOpen'
+import { TrashPane } from './TrashPane'
 import { TreePane } from './TreePane'
 
 /** 笔记树的宽度范围(px)。 */
@@ -64,6 +78,11 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [jump, setJump] = useState<{ line: number; nonce: number }>({ line: 1, nonce: 0 })
   /** 快速打开(Ctrl/Cmd+P、Ctrl/Cmd+K;仅当焦点在笔记区域内)。 */
   const [quickOpen, setQuickOpen] = useState(false)
+  /** 回收站面板与清单。 */
+  const [trashOpen, setTrashOpen] = useState(false)
+  const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([])
+  const [trashRoot, setTrashRoot] = useState('')
+  const [trashLoading, setTrashLoading] = useState(false)
   /** 正在行内改名的行 key(`n:<id>` / `c:<id>`)。 */
   const [renamingKey, setRenamingKey] = useState<string | null>(null)
   /**
@@ -267,6 +286,90 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     [run, t],
   )
 
+  /** 读一次回收站清单。 */
+  const refreshTrash = useCallback(async () => {
+    setTrashLoading(true)
+    try {
+      const result = await fetchTrash()
+      setTrashEntries(result.entries)
+      setTrashRoot(result.root)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setTrashLoading(false)
+    }
+  }, [])
+
+  /**
+   * 删除笔记 → **移入回收站**(文件不真删,可恢复)。这是 AGENTS.md「永不删用户的 .md」
+   * 在用户显式动作下的例外:先把文件挪进回收站,只有「彻底删除」才 unlink。
+   */
+  const onTrash = useCallback(
+    (note: TreeNote) => {
+      if (sessionId === '') {
+        setError(t('status.noSession'))
+        return
+      }
+      setBusy(true)
+      void (async () => {
+        try {
+          await trashNote(sessionId, note.id)
+          if (selected?.id === note.id) {
+            setSelected(null)
+            setSelectedRef(null)
+          }
+          setStatus(t('status.trashed').replace('{p}', note.title))
+          await refresh(true)
+          if (trashOpen) await refreshTrash()
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : String(caught))
+        } finally {
+          setBusy(false)
+        }
+      })()
+    },
+    [refresh, refreshTrash, selected, sessionId, t, trashOpen],
+  )
+
+  /** 回收站:恢复。 */
+  const onRestoreTrash = useCallback(
+    (entry: TrashEntry) => {
+      setBusy(true)
+      void (async () => {
+        try {
+          const result = await restoreTrash(sessionId, entry.id)
+          setStatus(t('status.restored').replace('{p}', result.path))
+          await refresh(true)
+          await refreshTrash()
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : String(caught))
+        } finally {
+          setBusy(false)
+        }
+      })()
+    },
+    [refresh, refreshTrash, sessionId, t],
+  )
+
+  /** 回收站:彻底删除(单条 / 清空)。 */
+  const onPurgeTrash = useCallback(
+    (entry: TrashEntry | null) => {
+      setBusy(true)
+      void (async () => {
+        try {
+          const result = await purgeTrash(entry === null ? null : entry.id, entry === null)
+          setStatus(t('status.purged').replace('{n}', String(result.removed)))
+          await refreshTrash()
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : String(caught))
+        } finally {
+          setBusy(false)
+        }
+      })()
+    },
+    [refreshTrash, t],
+  )
+
   /** 复制绝对路径。 */
   const onCopyPath = useCallback(
     (absolute: string, relative: string) => {
@@ -416,6 +519,18 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       <button
         type="button"
         className="dsh-notes-btn"
+        title={t('action.trash')}
+        aria-label={t('action.trash')}
+        onClick={() => {
+          setTrashOpen(true)
+          void refreshTrash()
+        }}
+      >
+        🗑
+      </button>
+      <button
+        type="button"
+        className="dsh-notes-btn"
         title={toggleLabel}
         aria-label={toggleLabel}
         aria-expanded={treeOpen}
@@ -468,6 +583,18 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             setSelectedRef(null)
           }}
           onClose={() => setQuickOpen(false)}
+        />
+      ) : null}
+      {trashOpen ? (
+        <TrashPane
+          t={t}
+          entries={trashEntries}
+          root={trashRoot}
+          loading={trashLoading}
+          onRestore={onRestoreTrash}
+          onPurge={(entry) => onPurgeTrash(entry)}
+          onPurgeAll={() => onPurgeTrash(null)}
+          onClose={() => setTrashOpen(false)}
         />
       ) : null}
       <div className="dsh-notes-header">
@@ -544,6 +671,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     onMoveCollection={onMoveCollection}
                     onPin={onPin}
                     onUnregister={onUnregister}
+                    onTrash={onTrash}
                     onCopyPath={onCopyPath}
                     onReveal={onReveal}
                     onNewNote={(collectionId) => startCompose('note', collectionId)}
