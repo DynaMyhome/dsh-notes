@@ -48,3 +48,13 @@ maybe('parseTable:对齐冒号与无外框写法', () => {
   assert.deepEqual(parsed.header.map((cell) => cell.text), ['A', 'B'])
   assert.equal(parsed.rows.length, 1)
 })
+
+test('表格后面紧跟的文段不能被吃成一行', () => {
+  const source = '| a | b |\n| --- | --- |\n| 1 | 2 |\n端到端'
+  const parsed = model.parseTable(source, 0)
+  assert.equal(parsed.rows.length, 1, '只有一行数据')
+  assert.equal(parsed.rows[0].map((cell) => cell.text).join(','), '1,2')
+  // 空行之后同理
+  const withBlank = model.parseTable('| a |\n| --- |\n| 1 |\n\n后面的段落', 0)
+  assert.equal(withBlank.rows.length, 1)
+})
