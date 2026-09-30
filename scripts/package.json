@@ -4,7 +4,10 @@
   "description": "dsh-notes 的构建工具链(只有 esbuild)。与插件运行期的 node_modules 分开:后者是指向 profile 的符号链接,只为解析 @deepseek-ai/*。",
   "devDependencies": {
     "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/lang-python": "^6.2.1",
     "@codemirror/language": "^6.12.4",
     "@codemirror/search": "^6.7.2",
     "@codemirror/state": "^6.7.6",

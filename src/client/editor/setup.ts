@@ -707,6 +707,15 @@ const theme = EditorView.theme({
     fontSize: '0.9em',
     lineHeight: '1.6',
   },
+  // 代码高亮的 token 颜色(全部走主题变量,深浅色自适应)
+  '.dsh-cm-code-body .tok-keyword': { color: 'var(--dsw-alias-brand-primary)' },
+  '.dsh-cm-code-body .tok-string': { color: 'var(--dsw-alias-label-success, #2f9e6e)' },
+  '.dsh-cm-code-body .tok-comment': { color: 'var(--dsw-alias-label-secondary)', fontStyle: 'italic' },
+  '.dsh-cm-code-body .tok-number, .dsh-cm-code-body .tok-type': { color: 'var(--dsw-alias-label-warning, #b7791f)' },
+  '.dsh-cm-code-body .tok-operator': { color: 'var(--dsw-alias-label-secondary)' },
+  '.dsh-cm-code-body .tok-atom, .dsh-cm-code-body .tok-constant': { color: 'var(--dsw-alias-brand-primary)' },
+  '.dsh-cm-code-body .tok-def, .dsh-cm-code-body .tok-function': { color: 'var(--dsw-alias-label-primary)' },
+  '.dsh-cm-code-body .tok-invalid': { color: 'var(--dsw-alias-label-danger, #d64545)' },
   '.dsh-cm-math': { padding: '0 1px' },
   '.dsh-cm-math math': { fontSize: '1.02em' },
   // 表格单元格就地编辑的输入框

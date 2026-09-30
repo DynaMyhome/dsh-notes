@@ -14,6 +14,10 @@ import { syntaxTree, ensureSyntaxTree } from '@codemirror/language'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 
 import { isSourceMode } from './mode'
+import { jsxLanguage, tsxLanguage, javascriptLanguage, typescriptLanguage } from '@codemirror/lang-javascript'
+import { jsonLanguage } from '@codemirror/lang-json'
+import { pythonLanguage } from '@codemirror/lang-python'
+import { highlightTree, tagHighlighter, tags as tokenTags } from '@lezer/highlight'
 
 /** 一个单元格:文本 + 它在**文档中的绝对范围**。 */
 export interface TableCell {
@@ -202,6 +206,66 @@ export function buildTableDecorations(state: EditorState): DecorationSet {
 }
 
 /**
+ * 代码高亮:用 lezer 解析 + `highlightTree` 生成带类名的 span。
+ *
+ * 为什么不自己写正则:语法高亮本身就是"语法树 → 类名"的映射,lezer 已经有各语言文法,
+ * 复用它可以避免"关键字认错、字符串里的关键字也上色"这类老问题。
+ */
+const CODE_HIGHLIGHTER = tagHighlighter([
+  { tag: tokenTags.keyword, class: 'tok-keyword' },
+  { tag: [tokenTags.name, tokenTags.deleted, tokenTags.character, tokenTags.propertyName, tokenTags.macroName], class: 'tok-name' },
+  { tag: [tokenTags.function(tokenTags.variableName), tokenTags.labelName], class: 'tok-function' },
+  { tag: [tokenTags.color, tokenTags.constant(tokenTags.name), tokenTags.standard(tokenTags.name)], class: 'tok-constant' },
+  { tag: [tokenTags.definition(tokenTags.name), tokenTags.separator], class: 'tok-def' },
+  { tag: [tokenTags.typeName, tokenTags.className, tokenTags.number, tokenTags.changed, tokenTags.annotation, tokenTags.modifier, tokenTags.self, tokenTags.namespace], class: 'tok-type' },
+  { tag: [tokenTags.operator, tokenTags.operatorKeyword, tokenTags.url, tokenTags.escape, tokenTags.regexp, tokenTags.link, tokenTags.special(tokenTags.string)], class: 'tok-operator' },
+  { tag: [tokenTags.meta, tokenTags.comment], class: 'tok-comment' },
+  { tag: [tokenTags.atom, tokenTags.bool, tokenTags.special(tokenTags.variableName)], class: 'tok-atom' },
+  { tag: [tokenTags.processingInstruction, tokenTags.string, tokenTags.inserted], class: 'tok-string' },
+  { tag: tokenTags.invalid, class: 'tok-invalid' },
+])
+
+/** 语言别名 → lezer 文法(没装的语法就退回纯文本,不猜)。 */
+const CODE_LANGUAGES: Record<string, { parser: { parse: (input: string) => unknown } }> = {
+  js: javascriptLanguage as never,
+  javascript: javascriptLanguage as never,
+  mjs: javascriptLanguage as never,
+  cjs: javascriptLanguage as never,
+  jsx: jsxLanguage as never,
+  ts: typescriptLanguage as never,
+  typescript: typescriptLanguage as never,
+  tsx: tsxLanguage as never,
+  json: jsonLanguage as never,
+  jsonc: jsonLanguage as never,
+  py: pythonLanguage as never,
+  python: pythonLanguage as never,
+}
+
+/** 把代码写进 `<code>`:有文法就上色,否则纯文本。 */
+function paintCode(target: HTMLElement, code: string, language: string): void {
+  const grammar = CODE_LANGUAGES[language.toLowerCase()]
+  if (grammar === undefined) {
+    target.textContent = code
+    return
+  }
+  try {
+    const tree = grammar.parser.parse(code) as Parameters<typeof highlightTree>[0]
+    let cursor = 0
+    highlightTree(tree, CODE_HIGHLIGHTER, (from, to, classes) => {
+      if (from > cursor) target.appendChild(document.createTextNode(code.slice(cursor, from)))
+      const span = document.createElement('span')
+      span.className = classes
+      span.textContent = code.slice(from, to)
+      target.appendChild(span)
+      cursor = to
+    })
+    if (cursor < code.length) target.appendChild(document.createTextNode(code.slice(cursor)))
+  } catch {
+    target.textContent = code
+  }
+}
+
+/**
  * 代码块卡片:圆角 + 顶栏(语言名 / 复制按钮)+ 等宽正文。
  *
  * 说明:按语言**上色**需要各语言的解析器(未安装),所以正文先给等宽 + 主题底色;
@@ -251,7 +315,7 @@ class CodeCardWidget extends WidgetType {
     const pre = document.createElement('pre')
     pre.className = 'dsh-cm-code-body'
     const codeEl = document.createElement('code')
-    codeEl.textContent = code
+    paintCode(codeEl, code, language)
     pre.appendChild(codeEl)
     card.append(bar, pre)
     return card
