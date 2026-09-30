@@ -35,6 +35,14 @@ export interface EditorAreaProps {
   onCursorLine: (line: number) => void
   jumpTo: { line: number; nonce: number } | null
   outlineMove: { fromLine: number; toLine: number; mode: 'before' | 'after'; nonce: number } | null
+  /**
+   * 「重量一次尺寸」的信号(外壳在**切回可见**或**改了字号**时 +1)。
+   *
+   * 这个 tab 类型声明了 `keepMounted`(见 main.tsx):切到别的 tab 时正文只是被隐藏,
+   * 编辑器活着但量出来是 0;字号一变,行高也跟着变。两种情况都要重新量,
+   * 否则光标命中/换行位置会错位。
+   */
+  measureNonce: number
   onWikiLink: (title: string) => void
   /** 撤销的前置钩子(有跳转历史时回到上一个笔记)。 */
   onBack: () => boolean
@@ -129,14 +137,15 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
     onCursorLine(cursor)
   }, [cursor, onCursorLine])
 
-  // 切到某个标签时让 CodeMirror 重新量一次(隐藏期间量出来是 0)
+  // 切到某个标签、或外壳要求重量(切回可见 / 改字号)时,让 CodeMirror 重新量一次
+  // (隐藏期间量出来是 0,字号变了行高也变了)
   useEffect(() => {
     if (activeKey === null) return
     const handle = handles.current.get(activeKey)
     if (handle?.view?.requestMeasure === undefined) return
     const timer = window.setTimeout(() => handle.view.requestMeasure?.(), 0)
     return () => window.clearTimeout(timer)
-  }, [activeKey])
+  }, [activeKey, props.measureNonce])
 
   const outlineFor = useCallback(
     (key: string) => (items: OutlineItem[]) => setOutlines((current) => (current[key] === items ? current : { ...current, [key]: items })),

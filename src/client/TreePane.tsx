@@ -20,6 +20,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { Tree, TreeNote, TreeRef, TreeUnfiled } from './api'
 import { ContextMenu, type MenuEntry } from './ContextMenu'
 import { IconChevron, IconCollection, IconInbox, IconNote } from './icons'
+import { cssSize } from './scale'
 
 /** 组件 props。 */
 export interface TreePaneProps {
@@ -499,7 +500,7 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                 ]
                   .filter(Boolean)
                   .join(' ')}
-                style={{ paddingLeft: `${6 + row.depth * 12}px` }}
+                style={{ paddingLeft: cssSize(6 + row.depth * 12) }}
                 role="treeitem"
                 aria-selected={row.selected === true}
                 title={row.hint}
@@ -644,7 +645,9 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
           <div
             className="dsh-notes-row dsh-notes-row-compose"
             style={{
-              paddingLeft: `${6 + (props.composerParent == null ? 0 : (rows.find((row) => row.key === `c:${props.composerParent}`)?.depth ?? 0) + 1) * 12}px`,
+              paddingLeft: cssSize(
+                6 + (props.composerParent == null ? 0 : (rows.find((row) => row.key === `c:${props.composerParent}`)?.depth ?? 0) + 1) * 12,
+              ),
             }}
           >
             {props.composer}

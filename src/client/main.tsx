@@ -227,6 +227,10 @@ const ZH: Record<string, string> = {
   'status.imported': '已导入 {n} 篇笔记',
   'status.importSkipped': '只支持 .md 文件',
   'status.dismiss': '关闭提示',
+  'scale.open': '调整笔记区的字号与图标大小',
+  'scale.title': '字号与图标大小',
+  'scale.hint': '只作用于笔记区域;基准字号跟随「设置 → 通用 → 字体大小」,这里再叠一层微调。',
+  'scale.reset': '复位',
 }
 
 const EN: Record<string, string> = {
@@ -375,6 +379,10 @@ const EN: Record<string, string> = {
   'status.imported': 'Imported {n} note(s)',
   'status.importSkipped': 'Only .md files are supported',
   'status.dismiss': 'Dismiss',
+  'scale.open': 'Adjust the notes area text and icon size',
+  'scale.title': 'Text & icon size',
+  'scale.hint': 'Notes area only; the base size follows Settings → General → Font size, and this adds a fine-tune factor on top.',
+  'scale.reset': 'Reset',
   'editor.pending': 'The editor arrives in P2 (CodeMirror 6); for now this shows the selected note path.',
   'editor.noSelection': 'Pick a note on the left.',
   'editor.refFrom': 'From another workspace: {name} (a mapping, not a copy)',
@@ -456,11 +464,20 @@ export function apply(ctx: any): void {
   const t = ctx.locale.bind(NS)
 
   // 1) tab 类型:纯页面类型(按 kind 打开),并在 guide 页留一枚入口胶囊。
+  //
+  //    `keepMounted: true` —— 右侧栏默认**卸载**没在显示的 tab 正文(官方
+  //    `SidebarRightTabDefinition.keepMounted` 的默认值是 false)。一旦卸载,NotesPane
+  //    的 state(树、标签、光标、滚动)**全丢**,切回来只能从头拉树 → 界面上就是那句
+  //    「读取中…」。官方文档的口径是:已经访问过的正文在切 tab / 切会话 / 收起 / 停靠
+  //    期间保留(没访问过的不提前挂载)—— 正是这里要的。
+  //    代价是隐藏期间组件还活着,所以轮询必须自己按可见性停下,见 NotesPane 的
+  //    `tab.visible` 门控(dsh-browser 走的也是这一套)。
   ctx.effect(
     () =>
       ctx.sidebarRightTabs.register({
         id: ID,
         kind: KIND,
+        keepMounted: true,
         title: () => t('tab.title'),
         guide: [
           {

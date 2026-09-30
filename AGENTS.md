@@ -83,6 +83,45 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 - **工作区切换**:内容路由都接受 `workspaceKey`(**只认已登记的**);用户侧写入的策略
   `policyFor` = **模式仍来自会话**(read-only 依旧只读),**边界根换成目标工作区根**。
 
+## 常驻正文 + 字号缩放(改这两块前先读)
+
+这两件事都建立在**同一个前提**上:右栏 tab 声明了 `keepMounted: true`(`main.tsx`),
+切走只是**隐藏**,组件不卸载。
+
+### 常驻正文(keepMounted)
+
+- 官方右栏 tab 正文默认**卸载**(`SidebarRightTabDefinition.keepMounted` 默认 false)。卸载即丢
+  `NotesPane` 的全部 state(树 / 标签 / 光标 / 滚动)→ 切回来只能从头拉树,界面上就是那句
+  **「读取中…」**(实测:切走时 `.dsh-notes-root` 从 DOM 消失,切回来 79ms 出现 loading)。
+- 声明 `keepMounted: true` 后正文常驻(隐藏期间 `offsetWidth === 0`)。**代价与配套**:
+  - 4s 轮询必须自己按可见性停下 —— 读座位注入的 `useTabInfo().tab.visible`
+    (`active && (float || expanded && (title || pane.activeTabId === tabId))`),镜像进 `visibleRef`
+    (不要写进 effect 依赖,否则定时器每次渲染重建 —— 与 `refreshRef` 同一个坑)。
+  - **变回可见时补一次对账 + 让编辑器重量尺寸**:隐藏期间轮询停了、CodeMirror 量出来是 0。
+    外壳用 `measureNonce` 通知 `EditorArea` 调 `requestMeasure()`(复用"切标签重量"的那条 effect)。
+  - 首次挂载仍是**可见时**发生(未访问过的正文不会提前挂载),所以"挂载即 focus"那类副作用不受影响。
+- 首次取树等 `wsReady`(`loadWorkspaces()` 完成后才放行):`fetchTree` 带的是**模块级**
+  `activeWorkspaceKey`,刚挂载时可能还是上一个会话留下的值 —— 抢跑会白跑一次、甚至取错工作区。
+
+### 字号缩放
+
+- 两个变量,都落在 `.dsh-notes-root` 上:
+  - `--dsh-notes-scale`(0.85–1.5,默认 1)= **本区微调**,由 React 行内 style 写(`scaleVars()`),
+    偏好存 `localStorage['dsh-notes:ui-scale']`(显示器级偏好,按浏览器存才对);
+  - `--dsh-content-font-delta` = 宿主**全局「字体大小」**的增量(ui-theme 写在 `body` 上,默认 0px)。
+    加上它 → 设置 → 通用改字号,笔记区跟着变,不用再调一次。
+- **唯一公式**:`cssSize(设计px)` = `calc(Npx × 系数 + 增量)`(`src/client/scale.ts`)。
+  样式表以 `sc` 的名字 import 它,行内样式/图标/CM6 主题直接用 `cssSize`。
+  **不要改用 `em`**:em 会逐层相乘(父级设了字号,子级再设一次就叠),而这里每个尺寸都要彼此独立、
+  且在「系数 1 + 增量 0」时与设计值逐像素一致(实测:13/26/30/13.5 全部原样)。
+- 用 `sc()` 的地方:字号、承载文字的高度/最小宽度、会被字撑开的宽度上限、图标、缩进、编辑器正文。
+  **保持 px**:边框/hairline、圆角、padding、gap、阴影、面板尺寸、以及 `position:fixed` 浮层的
+  **JS 坐标**(右键菜单 / 工作区菜单 / 拖拽跟随块)。
+- 所以**不许用 `zoom` / `transform: scale`**:浮层坐标是 JS 按视口 px 算的,缩放会把它们整体推偏
+  (实测 1.5× 时右键菜单左上空隙就是它的表现)。图标一律走 `icons.tsx` 的外壳
+  (自己画 svg 的 `IconChevron` 也要带上 width/height —— 漏了就是"只有折叠箭头不变大")。
+
+
 ## 功能现状(已交付,别重复造)
 
 - **编辑器**:预览/源码**按栏独立**(表头按钮切换);工具栏 23 键(7 组 + 4 弹层:标题 / 链接 /
@@ -97,6 +136,8 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 - **侧栏**:笔记树(右键菜单、拖拽)+ 纳入管理面板(最近 / 文件夹 / 已忽略 + 扫描范围 + 批量)
   + 回收站 + 大纲,四块共用一套 `ContextMenu` / panel 样式。
 - **缺 `notes/` 的工作区**:空态卡片 —— 「创建 notes/」或「改用已有目录(按工作区相对路径)」。
+- **字号/图标大小**:标题栏一个 `Aa`(五档预设 + 滑块 + 复位)→ `--dsh-notes-scale`,只作用于笔记区;
+  基准字号**跟随**设置 → 通用的「字体大小」。改字号/图标相关的东西前先读上面那节。
 - **窗口:** 侧栏 tab 的 chip 是「图标 + Notes」(`sidebar.right.pane.tab.title` 座位)。
 
 ## 位置决定(已实测,别再翻)
@@ -104,6 +145,8 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 - DSH **左栏没有**给插件留内容插槽(`sidebar.workspaces` 由 ui-workspace 独占,强占即 `shadows-shipped-ui`)。
 - 右栏 `sidebar.right.pane.tab` 是**按 tab 类型 id 派发**的加法插槽 → 笔记树 + 编辑区都放在**一个** tab 内部。
 - 右栏 tab 是 **session 作用域**;因此树内容按**工作区**(`sessionId → session.header.cwd`)取,布局按会话。
+- 右栏 tab 正文**默认卸载**(没在显示的 tab 不进 DOM),所以本插件注册时带 `keepMounted: true`:
+  切走只是隐藏、state 不丢(细节与配套见上面「常驻正文 + 字号缩放」那节)。
 - `.md` 的官方渲染实现是 `documentPreviews` 的 `…/markdown`(priority `builtin`);将来若要接管
   文件树里的 `.md` 预览,注册 `priority:'extension'` 的同扩展实现即可,不必改核心。
 
@@ -122,7 +165,9 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | `lib/outline.js` / `lib/section.js` | 大纲解析 / 章节搬移(纯函数,有单测) |
 | `lib/client.js` | **构建产物**,勿手改(`npm run build`) |
 | `src/client/main.tsx` | 侧栏注册、错误边界、i18n(zh/en 两份字典要同步加键) |
-| `src/client/NotesPane.tsx` | 区域外壳:工作区切换、树、4s 轮询、布局(`tabs`)状态 |
+| `src/client/NotesPane.tsx` | 区域外壳:工作区切换、树、4s 轮询(按 `tab.visible` 门控)、布局(`tabs`)、字号缩放状态 |
+| `src/client/scale.ts` | 字号/图标缩放的**纯模型**(偏好读写/夹取 + `cssSize()` 公式),单测 `test/scale.test.mjs` |
+| `src/client/ScaleControl.tsx` | 标题栏的 `Aa` 按钮 + 浮层(预设 / 滑块 / 复位) |
 | `src/client/editor/tabs.ts` | 标签/分栏**纯模型**(打开/关闭/移栏/持久化),单测 `test/tabs.test.mjs` |
 | `src/client/EditorArea.tsx` / `TabStrip.tsx` | 分栏渲染、标签条、拖动换栏 |
 | `src/client/TreePane.tsx` | 笔记树(拖拽载荷:`x-dsh-note-id` / `x-dsh-note-title` / `text/plain` = `[[标题]]`) |
@@ -140,7 +185,7 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
 | `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
-| `test/` | `node --test` 单测(136 条) |
+| `test/` | `node --test` 单测(145 条) |
 
 ## 开发与验证
 
