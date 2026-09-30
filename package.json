@@ -42,7 +42,7 @@
   "scripts": {
     "setup": "npm install --prefix scripts --no-audit --no-fund",
     "build": "node scripts/build.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --experimental-strip-types --test test/*.test.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
