@@ -24,8 +24,11 @@ export interface TabStripProps {
   onMoveToOther: (key: string) => void
   /** 关闭分屏(第 2 栏的标签并入第 1 栏)。 */
   onCloseSplit: () => void
-  /** 拖放:把标签放到本栏的 `index` 位置(栏内重排 / 跨栏都用它)。 */
-  onDropTab: (key: string, pane: 'p1' | 'p2', index: number) => void
+  /**
+   * 落点:把载荷交给上层判断 —— `text/x-dsh-note-tab` = 移动标签,
+   * `text/x-dsh-note-id` = 从左侧栏拖进来的笔记(在那一栏新开标签)。
+   */
+  onDropPayload: (data: DataTransfer, pane: 'p1' | 'p2', index: number) => void
   /** 拖动经过时报告插入位(画竖线);null = 离开。 */
   onDropHint: (hint: { pane: 'p1' | 'p2'; index: number } | null) => void
   /** 当前指示线画在第几个 tab 之前(由 EditorArea 统一管)。 */
@@ -57,8 +60,7 @@ export function TabStrip(props: TabStripProps): React.ReactElement {
       }}
       onDrop={(event) => {
         event.preventDefault()
-        const key = event.dataTransfer.getData('text/x-dsh-note-tab')
-        if (key !== '') props.onDropTab(key, pane.id, props.dropIndex ?? pane.tabs.length)
+        props.onDropPayload(event.dataTransfer, pane.id, props.dropIndex ?? pane.tabs.length)
         props.onDropHint(null)
       }}
     >

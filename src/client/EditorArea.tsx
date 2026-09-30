@@ -47,6 +47,13 @@ export interface EditorAreaProps {
    * 而引用载荷要的是相对路径 —— 在这里兜住,新旧标签都对。
    */
   relPathOf: (tab: NoteTab) => string
+  /**
+   * 落点统一入口:标签载荷 → 移动标签;笔记载荷 → 在那一栏新开标签。
+   * @param data - 拖放数据。
+   * @param pane - 目标栏。
+   * @param index - 目标位置。
+   */
+  onDropPayload: (data: DataTransfer, pane: 'p1' | 'p2', index: number) => void
   /** 每栏的源码/预览模式(分屏时各管各的)。 */
   sourceModeByPane: Record<'p1' | 'p2', boolean>
   onToggleSourceMode: (id: 'p1' | 'p2') => void
@@ -141,9 +148,8 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
       }}
       onDrop={(event) => {
         if ((event.target as HTMLElement | null)?.closest?.('.dsh-notes-tabstrip') !== null) return
-        const key = event.dataTransfer.getData('text/x-dsh-note-tab')
         event.preventDefault()
-        if (key !== '') props.onLayout(moveTab(layout, key, { pane: pane.id, index: pane.tabs.length }))
+        props.onDropPayload(event.dataTransfer, pane.id, pane.tabs.length)
         setDropHint(null)
       }}
     >
@@ -163,8 +169,8 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
         }
         onMoveToOther={(key) => props.onLayout(moveTab(layout, key, { pane: pane.id === 'p1' ? 'p2' : 'p1' }))}
         onCloseSplit={() => props.onLayout(closeSecondPane(layout))}
-        onDropTab={(key, target, index) => {
-          props.onLayout(moveTab(layout, key, { pane: target, index }))
+        onDropPayload={(data, target, index) => {
+          props.onDropPayload(data, target, index)
           setDropHint(null)
         }}
         onDropHint={setDropHint}

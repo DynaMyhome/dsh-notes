@@ -9,6 +9,7 @@
 import React, { useEffect, useState } from 'react'
 
 import type { TrashEntry } from './api'
+import { IconTrash } from './icons'
 
 /** 面板 props。 */
 export interface TrashPaneProps {
@@ -90,10 +91,14 @@ export function TrashPane(props: TrashPaneProps): React.ReactElement {
           {props.loading ? (
             <div className="dsh-notes-dim dsh-notes-panel-pad">{t('trash.loading')}</div>
           ) : props.entries.length === 0 ? (
-            <div className="dsh-notes-dim dsh-notes-panel-pad">{t('trash.empty')}</div>
+            <div className="dsh-notes-trash-empty">
+              <IconTrash size={22} />
+              <span>{t('trash.empty')}</span>
+            </div>
           ) : (
             props.entries.map((entry) => (
               <div key={entry.id} className="dsh-notes-trash-row">
+                <IconTrash size={13} />
                 <span className="dsh-notes-trash-name">
                   {entry.title}
                   {entry.exists ? null : <span className="dsh-notes-trash-danger" style={{ marginLeft: 6, fontSize: 11 }}>{t('trash.missing')}</span>}

@@ -774,11 +774,19 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
         />
       )}
 
+      {/* 状态条永远**一行**:窄了就省略(路径最先被截),完整内容放 title 里悬停看。
+          以前会折成两行,在窄栏里看起来像个多余的小悬浮框。 */}
       <div className="dsh-notes-editor-status">
-        <span>{stateText}</span>
+        <span className="dsh-notes-status-state" title={stateText}>
+          {stateText}
+        </span>
         <span className="dsh-notes-spacer" />
-        <span className="dsh-notes-dim">{t('editor.chars').replace('{n}', String(length))}</span>
-        <span className="dsh-notes-dim dsh-notes-mono">{note.relPath}</span>
+        <span className="dsh-notes-dim dsh-notes-status-chars" title={t('editor.chars').replace('{n}', String(length))}>
+          {t('editor.chars').replace('{n}', String(length))}
+        </span>
+        <span className="dsh-notes-dim dsh-notes-mono dsh-notes-status-path" title={note.path}>
+          {note.relPath}
+        </span>
       </div>
     </div>
   )

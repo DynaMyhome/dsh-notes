@@ -38,9 +38,11 @@ import {
 import { EditorArea } from './EditorArea'
 import { setSourceMode as applySourceMode } from './editor/mode'
 import {
+  activateTab,
   emptyLayout,
   loadLayout,
   migrateLayout,
+  moveTab,
   openTab,
   pruneTabsForWorkspace,
   saveLayout,
@@ -48,6 +50,14 @@ import {
   type LayoutState,
   type NoteTab,
 } from './editor/tabs'
+import {
+  IconCollapse,
+  IconExpand,
+  IconInbox,
+  IconNewFolder,
+  IconNewNote,
+  IconTrash,
+} from './icons'
 import { OutlinePane, type OutlineItem } from './OutlinePane'
 import { QuickOpen } from './QuickOpen'
 import { CandidatesPanel } from './CandidatesPanel'
@@ -83,6 +93,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [treeWidth, setTreeWidth] = useState(TREE_DEFAULT)
   const [tree, setTree] = useState<Tree | null>(null)
   const [loading, setLoading] = useState(false)
+  /** 树的镜像(给 refresh 判断"是不是首次加载",不参与渲染)。 */
+  const treeRef = useRef<Tree | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   /** 当前笔记区域在看哪个工作区(null = 会话自己的工作区)。 */
@@ -175,6 +187,13 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       }
       const targetPane = pane ?? (mode === 'split' ? 'p2' : activePane)
       setLayoutState((current) => {
+        // 同栏已经开着这篇 → 激活它,不再开一个重复标签(＋ 点两下不该出两个一样的)
+        const opened = current.panes.find((item) => item.id === targetPane)?.tabs.find((item) => item.key === tab.key)
+        if (mode === 'tab' && opened !== undefined) {
+          const activated = activateTab(current, tab.key)
+          saveLayout(layoutKey, activated)
+          return activated
+        }
         const next = openTab(current, tab, { mode, pane: targetPane })
         saveLayout(layoutKey, next)
         return next
@@ -182,6 +201,28 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       setActivePane(targetPane)
     },
     [activePane, layoutKey],
+  )
+
+  /**
+   * 在某一栏的指定位置打开一篇笔记(从左侧栏**拖进来**时用)。
+   * @param noteId - 笔记 id。
+   * @param pane - 目标栏。
+   * @param index - 插入位置(拖到标签右半就用它后面的位置)。
+   */
+  const openNoteAt = useCallback(
+    (noteId: string, pane: 'p1' | 'p2', index: number) => {
+      const note = tree?.notes.find((item) => item.id === noteId)
+      if (note === undefined) return
+      openNote(note, 'tab', undefined, pane)
+      // openNote 落在末尾,再按落点把它挪到指定位置
+      setLayoutState((current) => {
+        const next = moveTab(current, tabKeyOf(layoutKey, noteId), { pane, index })
+        if (next === current) return current
+        saveLayout(layoutKey, next)
+        return next
+      })
+    },
+    [layoutKey, openNote, tree],
   )
 
   /**
@@ -316,9 +357,12 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const refresh = useCallback(
     async (force = false): Promise<Tree | null> => {
       if (sessionId === '') return null
-      if (!force) setLoading(true)
+      // 只有"还没有树"时才显示加载态:轮询每 4s 来一次,老树还在的时候置 loading
+      // 会让左侧栏顶部那行**每 4 秒闪一下**(实测的闪烁就是这么来的)。
+      if (!force && treeRef.current === null) setLoading(true)
       try {
         const next = await fetchTree(sessionId, force)
+        treeRef.current = next
         setTree(next)
         setError(null)
         syncLayout(next)
@@ -963,7 +1007,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           setDraft('')
         }}
       >
-        ＋
+        <IconNewNote />
       </button>
       <button
         type="button"
@@ -977,7 +1021,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           setDraft('')
         }}
       >
-        ⊞
+        <IconNewFolder />
       </button>
       <button
         type="button"
@@ -989,7 +1033,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           void refreshTrash()
         }}
       >
-        🗑
+        <IconTrash />
       </button>
       <button
         type="button"
@@ -999,7 +1043,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         aria-expanded={treeOpen}
         onClick={() => setTreeOpen((open) => !open)}
       >
-        {treeOpen ? '⯇' : '⯈'}
+        {treeOpen ? <IconCollapse /> : <IconExpand />}
       </button>
     </>
   )
@@ -1042,8 +1086,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         <QuickOpen
           notes={tree?.notes ?? []}
           onPick={(note) => {
-            // 从哪一栏的 ＋ 点的,就开在那一栏
-            openNote(note, 'reuse', undefined, quickOpenPane)
+            // 从哪一栏的 ＋ 点的就开在那一栏,而且是**新建标签**(以前是替换当前标签)
+            openNote(note, 'tab', undefined, quickOpenPane)
           }}
           onClose={() => setQuickOpen(false)}
         />
@@ -1281,7 +1325,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                 setDraft('')
               }}
             >
-              ＋
+              <IconNewNote />
             </button>
             <button
               type="button"
@@ -1295,7 +1339,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                 setDraft('')
               }}
             >
-              ⊞
+              <IconNewFolder />
             </button>
             <button
               type="button"
@@ -1304,7 +1348,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               aria-label={t('action.files')}
               onClick={onOpenCandidates}
             >
-              ⇥
+              <IconInbox />
             </button>
             <button
               type="button"
@@ -1314,7 +1358,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               aria-expanded={false}
               onClick={() => setTreeOpen(true)}
             >
-              ▸
+              <IconExpand />
             </button>
           </div>
         )}
@@ -1333,6 +1377,21 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             activePane={activePane}
             onFocusPane={setActivePane}
             relPathOf={relPathOf}
+            onDropPayload={(data, target, index) => {
+              const tabKey = data.getData('text/x-dsh-note-tab')
+              if (tabKey !== '') {
+                setLayoutState((current) => {
+                  const next = moveTab(current, tabKey, { pane: target, index })
+                  if (next === current) return current
+                  saveLayout(layoutKey, next)
+                  return next
+                })
+                setActivePane(target)
+                return
+              }
+              const noteId = data.getData('text/x-dsh-note-id')
+              if (noteId !== '') openNoteAt(noteId, target, index)
+            }}
             onQuickOpen={(pane) => {
               setQuickOpenPane(pane)
               setQuickOpen(true)

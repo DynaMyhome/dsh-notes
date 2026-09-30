@@ -402,3 +402,15 @@ export function IconWikiLink(props: IconProps): React.ReactElement {
     </Svg>
   )
 }
+
+/** 回收站(垃圾桶轮廓)。 */
+export function IconTrash(props: IconProps): React.ReactElement {
+  return (
+    <Svg {...props}>
+      <path d="M3 5h10" />
+      <path d="M6.5 5V3.8h3V5" />
+      <path d="M4.4 5l.6 8.2h6L11.6 5" />
+      <path d="M6.8 7.4v3.8M9.2 7.4v3.8" />
+    </Svg>
+  )
+}

@@ -18,6 +18,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Tree, TreeNote, TreeRef, TreeUnfiled } from './api'
+import { ContextMenu, type MenuEntry } from './ContextMenu'
 import { IconChevron, IconCollection, IconInbox, IconNote } from './icons'
 
 /** 组件 props。 */
@@ -525,8 +526,12 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                 onDragStart={(event) => {
                   if (row.drag === undefined) return
                   dragging = row.drag
-                  event.dataTransfer.effectAllowed = 'move'
+                  event.dataTransfer.effectAllowed = 'copyMove'
                   event.dataTransfer.setData('text/plain', row.key)
+                  // 笔记行额外带一个自定义类型:编辑区据此"拖进来就在那一栏打开"
+                  if (row.kind === 'note' && row.key.startsWith('n:')) {
+                    event.dataTransfer.setData('text/x-dsh-note-id', row.key.slice(2))
+                  }
                 }}
                 onDragEnd={endDrag}
                 onDragOver={(event) => {
@@ -648,59 +653,45 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
       ) : null}
 
       {menu !== null ? (
-        <div
-          className="dsh-notes-menu"
-          style={{ left: menu.x, top: menu.y }}
-          role="menu"
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          {(() => {
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          entries={(() => {
             const note = menuNote(menu.row)
-            const item = (label: string, action: () => void): React.ReactElement => (
-              <button
-                key={label}
-                type="button"
-                role="menuitem"
-                className="dsh-notes-menu-item"
-                onClick={() => {
-                  setMenu(null)
-                  action()
-                }}
-              >
-                {label}
-              </button>
-            )
+            const item = (id: string, label: string, action: () => void): MenuEntry => ({
+              id,
+              label,
+              action: () => {
+                setMenu(null)
+                action()
+              },
+            })
             if (note !== null) {
-              return (
-                <>
-                  {item(note.pinned ? t('menu.unpin') : t('menu.pin'), () => props.onPin(note, !note.pinned))}
-                  {item(t('menu.rename'), () => props.onStartRename?.(menu.row.key))}
-                  {item(t('menu.copyPath'), () => props.onCopyPath(note.path, note.relPath))}
-                  {item(t('menu.reveal'), () => props.onReveal(note.relPath))}
-                  {item(t('menu.newNoteHere'), () => props.onNewNote(menu.row.parentId ?? null))}
-                  <div className="dsh-notes-menu-sep" />
-                  {item(t('menu.unregister'), () => props.onUnregister(note))}
-                  {item(t('menu.unregisterIgnore'), () => props.onUnregisterIgnore?.(note))}
-                  {item(t('menu.trash'), () => props.onTrash?.(note))}
-                </>
-              )
+              return [
+                item('pin', note.pinned ? t('menu.unpin') : t('menu.pin'), () => props.onPin(note, !note.pinned)),
+                item('rename', t('menu.rename'), () => props.onStartRename?.(menu.row.key)),
+                item('path', t('menu.copyPath'), () => props.onCopyPath(note.path, note.relPath)),
+                item('reveal', t('menu.reveal'), () => props.onReveal(note.relPath)),
+                item('newHere', t('menu.newNoteHere'), () => props.onNewNote(menu.row.parentId ?? null)),
+                { id: 'sep', separator: true },
+                item('unregister', t('menu.unregister'), () => props.onUnregister(note)),
+                item('unregisterIgnore', t('menu.unregisterIgnore'), () => props.onUnregisterIgnore?.(note)),
+                item('trash', t('menu.trash'), () => props.onTrash?.(note)),
+              ]
             }
             if (menu.row.key === '__blank') {
-              return (
-                <>
-                  {item(t('menu.newNote'), () => props.onNewNote(null))}
-                  {item(t('menu.newCollection'), () => props.onNewCollection(null))}
-                </>
-              )
+              return [
+                item('newNote', t('menu.newNote'), () => props.onNewNote(null)),
+                item('newCollection', t('menu.newCollection'), () => props.onNewCollection(null)),
+              ]
             }
-            return (
-              <>
-                {item(t('menu.newNoteHere'), () => props.onNewNote(menu.row.dropAs ?? null))}
-                {item(t('menu.newSubCollection'), () => props.onNewCollection(menu.row.dropAs ?? null))}
-              </>
-            )
+            return [
+              item('newHere', t('menu.newNoteHere'), () => props.onNewNote(menu.row.dropAs ?? null)),
+              item('newSub', t('menu.newSubCollection'), () => props.onNewCollection(menu.row.dropAs ?? null)),
+            ]
           })()}
-        </div>
+          onClose={() => setMenu(null)}
+        />
       ) : null}
 
       {tree !== null && tree.stats.unfiled === 0 && tree.stats.notes === 0 && !loading ? (

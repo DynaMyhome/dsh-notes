@@ -896,20 +896,23 @@ const theme = EditorView.theme({
   },
   '.dsh-cm-table-row': { fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)' },
   '.dsh-cm-bullet': { color: 'var(--dsw-alias-label-secondary)', paddingRight: '2px' },
-  '.dsh-cm-table-wrap': { padding: '4px 0' },
+  '.dsh-cm-table-wrap': { padding: '6px 0' },
   '.dsh-cm-table': {
     borderCollapse: 'collapse',
     fontSize: '0.95em',
-    width: 'fit-content',
-    maxWidth: '100%',
+    // 铺满编辑区(照 Typora)。以前是 `fit-content`,实测表格只有 123px 宽、
+    // 而正文宽 189px —— 看起来就像"表格没占满"。
+    width: '100%',
+    tableLayout: 'auto',
   },
   '.dsh-cm-table th, .dsh-cm-table td': {
     // 给绝对定位的编辑输入框当定位参照(见 .dsh-cm-table-input)
     position: 'relative',
     border: '1px solid var(--dsw-alias-border-l1)',
-    padding: '3px 10px',
+    padding: '6px 12px',
     textAlign: 'left',
     verticalAlign: 'top',
+    minWidth: '48px',
   },
   '.dsh-cm-table th': {
     fontWeight: '600',
