@@ -24,6 +24,36 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
    `webServer.register`(自鉴权)、`fs`(守卫式写入)、`workspaceFiles`(只读 Remote)。权威接口面以
    `cordis_inspect_list` / `cordis_inspect_query` 与已安装包的 `lib/types/*.d.ts` 为准。
 
+## 工作区 md 的三类模型(改动前先读)
+
+工作区里的 md 分三类(见 `service.classify`):
+
+| 类 | 含义 | 界面 |
+| --- | --- | --- |
+| **笔记** | 已纳入索引(有 `dsh-note-id`) | 笔记树 |
+| **候选** | 未纳入、也还没标记 | 「纳入管理」面板(最近 / 按文件夹) |
+| **杂项** | 未纳入、被显式标为忽略 | 面板「已忽略」段,可放回候选 |
+
+- **扫描范围**(`workspace.scanRoots`,默认只有 `notesDir`):实测本机一次 `fs.listDir`
+  约 **330ms**(WSL + /mnt/d drvfs + 沙箱 provider),1268 个目录 ≈ 7 分钟 —— 所以
+  **默认只扫 notes/**,要看别处必须在面板里加根(或 Agent 用 `knowledge ignore/include` 点名)。
+- 一趟走不完会把**队列前沿**留在内存(`walkStates`),下次调用接着走;界面按块拉取并显示进度。
+- **只有整趟走完且没被截断**才做"文件没了"的对账 —— 截断时绝不误删条目。
+- 增量索引在 `$DSH_HOME/knowledge/index/<workspaceKey>.json`(`relPath → {v,s,id}`):
+  版本/大小没变就不读文件;变了才用 `fs.readByteRange` 读前 4KB 解 id。
+- 「忽略」只动映射,永不删文件;已登记的文件被删 → 走目录时按 id 找不到 → 条目一起消失。
+
+## 身份、标题与多文档
+
+- **标题 = 文件名**(Obsidian 模型)。正文里的 H1 只是正文,`[[链接]]` 也按文件名解析。
+- `dsh-note-id` 只在**纳入那一刻**写入;预览模式把它收成一行「⋯ 元数据」chip
+  (点一下展开源码)。保存时若发现 id 被删/被改,Host 会按索引**写回**并在响应里带
+  `restoredId` —— 这是身份标识的兜底,`editor.idRestored` 会提示用户。
+- **标签栏 + 左右分屏**:每栏一条自己的标签栏;布局按工作区存 localStorage
+  (`dsh-notes:tabs:<workspaceKey>`),最多 8 个标签/栏;标签页保持挂载(切标签不重读盘)。
+- **工作区切换**:内容路由都接受 `workspaceKey`(**只认已登记的**);用户侧写入的策略
+  `policyFor` = **模式仍来自会话**(read-only 依旧只读),**边界根换成目标工作区根**。
+
 ## 位置决定(已实测,别再翻)
 
 - DSH **左栏没有**给插件留内容插槽(`sidebar.workspaces` 由 ui-workspace 独占,强占即 `shadows-shipped-ui`)。
@@ -37,8 +67,13 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | 路径 | 作用 |
 | --- | --- |
 | `lib/index.js` | Host 半:配置、索引、路由(`/dsh-notes/*`)、`knowledge` 工具 |
+| `lib/notes.js` | 纯函数:路径 / frontmatter / 标题(=文件名)/ glob 匹配 |
+| `lib/service.js` | 工作区解析与切换、扫描(目录前沿续走)、三类分类、回收站 |
 | `lib/client.js` | **构建产物**,勿手改(`npm run build`) |
-| `src/client/` | 客户端源码:区域外壳、树、编辑器、样式 |
+| `src/client/` | 客户端源码:区域外壳、树、纳入管理面板、标签/分屏、编辑器、样式 |
+| `src/client/editor/tabs.ts` | 标签/分栏**纯模型**(打开/关闭/移栏/持久化),单测在 `test/tabs.test.mjs` |
+| `src/client/editor/media.ts` | 媒体地址工具(单独成模块是为打断 `decorate ⇄ setup` 循环依赖) |
+| `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
 | `test/` | `node --test` 单测 |
@@ -50,7 +85,8 @@ cd "/mnt/d/project/deepseek worksapce/harness develop/dsh-notes"
 npm run setup                # 装构建工具链(只有 esbuild,落在 scripts/node_modules)
 npm run build                # src/client → lib/client.js
 node --check lib/index.js && node --check lib/client.js
-node --test test/*.test.mjs
+npm test                     # = node --experimental-strip-types --test test/*.test.mjs
+node scripts/build-graph.mjs # 依赖环检查:必须 cycles: 0
 ```
 
 **`node_modules` 是符号链接,不是装出来的**(本工作区惯例,同 `dsh-explain-sidebar`):
