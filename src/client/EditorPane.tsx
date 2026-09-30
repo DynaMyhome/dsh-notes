@@ -33,7 +33,9 @@ import {
 } from './editor/setup'
 import { initialAnchor } from './editor/frontmatter'
 import type { OutlineItem } from './OutlinePane'
+import { ContextMenu, type MenuEntry } from './ContextMenu'
 import { setSourceMode as applySourceMode } from './editor/mode'
+import { buildNoteReference, headingBreadcrumb } from './editor/reference'
 import {
   IconBold,
   IconCheck,
@@ -125,6 +127,8 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   const [conflict, setConflict] = useState<{ version: string; text: string | null } | null>(null)
   /** 一次性提示(如「已恢复 dsh-note-id」),3 秒后自动消失。 */
   const [notice, setNotice] = useState<string | null>(null)
+  /** 右键菜单(位置 + 打开时的选区快照)。 */
+  const [menu, setMenu] = useState<{ x: number; y: number; from: number; to: number } | null>(null)
   const [docPath, setDocPath] = useState<string | null>(null)
   const [length, setLength] = useState(0)
   /** 源码模式(Typora 式:默认预览,标记全隐藏;要看/改源码时切过来)。 */
@@ -303,6 +307,19 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
    *
    * 顺手收起弹层:弹层与"直接生效"的命令是互斥的,留着它会挡住刚改过的正文。
    */
+  /** 写剪贴板并给一句提示(失败也要说清楚,别静默)。 */
+  const copyText = useCallback(
+    async (text: string) => {
+      try {
+        await navigator.clipboard.writeText(text)
+        setNotice(t('editor.copied'))
+      } catch {
+        setNotice(t('editor.copyFailed'))
+      }
+    },
+    [t],
+  )
+
   const apply = useCallback((action: (handle: EditorHandle) => void) => {
     setPopover(null)
     const editor = editorRef.current
@@ -378,6 +395,80 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     },
     [apply, mathTex],
   )
+
+  /** 右键菜单:引用此处 + 文本格式 / 段落设置 / 插入(照 Obsidian 1.5 的原生三组)。 */
+  const menuEntries = (snapshot: { from: number; to: number }): MenuEntry[] => {
+    const editor = editorRef.current
+    if (editor === null) return []
+    const text = editor.getDoc()
+    const run = (action: (handle: EditorHandle) => void): (() => void) => () => apply(action)
+    const reference = (): void => {
+      void copyText(
+        buildNoteReference({
+          relPath: note.relPath,
+          text,
+          from: snapshot.from,
+          to: snapshot.to,
+          heading: headingBreadcrumb(text, snapshot.from),
+        }),
+      )
+    }
+    return [
+      { id: 'ref', label: t('menu.quoteHere'), shortcut: '⇧⌘C', action: reference },
+      { id: 'path', label: t('menu.copyPath'), action: () => void copyText(note.relPath) },
+      { id: 'title', label: t('menu.copyTitle'), action: () => void copyText(note.title) },
+      { id: 'sep1', separator: true },
+      {
+        id: 'format',
+        label: t('menu.format'),
+        children: [
+          { id: 'bold', label: t('editor.bold'), action: run((e) => wrapSelection(e.view, '**')) },
+          { id: 'italic', label: t('editor.italic'), action: run((e) => wrapSelection(e.view, '*')) },
+          { id: 'strike', label: t('editor.strike'), action: run((e) => wrapSelection(e.view, '~~')) },
+          { id: 'highlight', label: t('editor.highlight'), action: run((e) => wrapSelection(e.view, '==')) },
+          { id: 'code', label: t('editor.code'), action: run((e) => wrapSelection(e.view, '`')) },
+          { id: 'math', label: t('editor.mathInline'), action: run((e) => insertMath(e.view, '', false)) },
+          { id: 'link', label: t('editor.link'), action: run((e) => insertLink(e.view, '', '')) },
+          { id: 'clear', label: t('menu.clearFormat'), action: run((e) => clearFormatting(e.view)) },
+        ],
+      },
+      {
+        id: 'paragraph',
+        label: t('menu.paragraph'),
+        children: [
+          ...[0, 1, 2, 3, 4, 5, 6].map((level) => ({
+            id: `h${level}`,
+            label: level === 0 ? t('menu.paragraphText') : `H${level}`,
+            shortcut: level === 0 ? undefined : `⌘${level}`,
+            action: run((e) => setHeading(e.view, level)),
+          })),
+          { id: 'psep', separator: true },
+          { id: 'bullet', label: t('editor.list'), action: run((e) => toggleLinePrefix(e.view, '- ')) },
+          { id: 'ordered', label: t('editor.orderedList'), action: run((e) => toggleLinePrefix(e.view, '1. ')) },
+          { id: 'task', label: t('editor.taskList'), action: run((e) => toggleLinePrefix(e.view, '- [ ] ')) },
+          { id: 'quote', label: t('editor.quote'), action: run((e) => toggleLinePrefix(e.view, '> ')) },
+          { id: 'indent', label: t('editor.indent'), action: run((e) => toggleIndent(e.view, false)) },
+          { id: 'outdent', label: t('editor.outdent'), action: run((e) => toggleIndent(e.view, true)) },
+        ],
+      },
+      {
+        id: 'insert',
+        label: t('menu.insert'),
+        children: [
+          { id: 'table', label: t('editor.table'), action: run((e) => insertTable(e.view, 3, 3)) },
+          { id: 'image', label: t('editor.image'), action: run((e) => insertImageSnippet(e.view)) },
+          { id: 'ilink', label: t('editor.link'), action: run((e) => insertLink(e.view, '', '')) },
+          { id: 'wiki', label: t('editor.wikiLink'), action: run((e) => insertWikiLinkSnippet(e.view)) },
+          { id: 'mathblock', label: t('editor.mathBlock'), action: run((e) => insertMath(e.view, '', true)) },
+          { id: 'fence', label: t('editor.codeBlock'), action: run((e) => insertCodeFence(e.view)) },
+          { id: 'hr', label: t('editor.horizontalRule'), action: run((e) => insertHorizontalRule(e.view)) },
+        ],
+      },
+      { id: 'sep2', separator: true },
+      { id: 'undo', label: t('editor.undo'), action: run((e) => historyUndo(e.view)) },
+      { id: 'redo', label: t('editor.redo'), action: run((e) => historyRedo(e.view)) },
+    ]
+  }
 
   const stateText =
     status === 'loading'
@@ -651,6 +742,9 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       </div>
 
       {notice !== null ? <div className="dsh-notes-notice">{notice}</div> : null}
+      {menu === null ? null : (
+        <ContextMenu x={menu.x} y={menu.y} entries={menuEntries(menu)} onClose={() => setMenu(null)} />
+      )}
       {conflict !== null ? (
         <div className="dsh-notes-conflict">
           <IconWarn size={14} />
@@ -667,7 +761,17 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       {status === 'failed' ? (
         <div className="dsh-notes-error">{error ?? t('editor.loadFailed')}</div>
       ) : (
-        <div className="dsh-notes-editor-host" ref={hostRef} />
+        <div
+          className="dsh-notes-editor-host"
+          ref={hostRef}
+          onContextMenu={(event) => {
+            const editor = editorRef.current
+            if (editor === null) return
+            event.preventDefault()
+            const range = editor.view.state.selection.main
+            setMenu({ x: event.clientX, y: event.clientY, from: range.from, to: range.to })
+          }}
+        />
       )}
 
       <div className="dsh-notes-editor-status">

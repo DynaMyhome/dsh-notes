@@ -525,6 +525,52 @@ function safeBuild(
   }
 }
 
+/**
+ * 清除选区两端的成对标记(`**` `*` `~~` `==` `` ` ``),保留文字。
+ *
+ * 只处理**紧贴选区两端**的标记(不猜文档其它地方),选区取不到时就对整行生效。
+ * @param view - 编辑器视图。
+ */
+export function clearFormatting(view: EditorView): void {
+  const range = view.state.selection.main
+  const from = range.from
+  const to = range.to
+  if (from === to) {
+    const line = view.state.doc.lineAt(from)
+    const text = line.text
+    const stripped = text.replace(/^(\s*)(?:#{1,6}\s+|>\s+|[-*+]\s+|\d+\.\s+|\[[ xX]\]\s+)/, '$1')
+    if (stripped === text) return
+    view.dispatch({ changes: { from: line.from, to: line.to, insert: stripped }, selection: { anchor: line.from + stripped.length } })
+    view.focus()
+    return
+  }
+  let text = view.state.sliceDoc(from, to)
+  const pairs = [['**', '**'], ['~~', '~~'], ['==', '=='], ['*', '*'], ['`', '`']]
+  for (const [open, close] of pairs) {
+    const outer = view.state.sliceDoc(Math.max(0, from - open.length), Math.min(view.state.doc.length, to + close.length))
+    if (outer.startsWith(open) && outer.endsWith(close)) {
+      view.dispatch({
+        changes: [
+          { from: from - open.length, to: from, insert: '' },
+          { from: to, to: to + close.length, insert: '' },
+        ],
+        selection: { anchor: from - open.length, head: to - open.length },
+      })
+      view.focus()
+      return
+    }
+  }
+  // 选区自己就带着标记:`**粗**` → `粗`
+  for (const [open, close] of pairs) {
+    if (text.length > open.length + close.length && text.startsWith(open) && text.endsWith(close)) {
+      text = text.slice(open.length, text.length - close.length)
+      view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from, head: from + text.length } })
+      view.focus()
+      return
+    }
+  }
+}
+
 /** 在当前选区插入图片片段,并**选中占位路径**便于直接替换。 */
 /**
  * 在空行敲 ``` / ```lang 后回车:自动补上**收尾围栏**,光标停在中间 —— Typora/Obsidian 手感。

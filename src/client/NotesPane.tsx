@@ -136,9 +136,17 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   /** 当前栏 + 当前标签(其余都是派生值,方便老代码继续用 `selected`)。 */
   const currentPane = layout.panes.find((item) => item.id === activePane) ?? layout.panes[0]
   const activeTab: NoteTab | null = currentPane?.tabs.find((tab) => tab.key === currentPane.active) ?? null
+  /**
+   * 工作区相对路径。
+   *
+   * 先看标签自己存的(新开的标签有),再回落到**树里的那条**(树总是带 relPath),
+   * 都没有才用绝对路径 —— 引用载荷要的是相对路径,而老布局里的标签没有这个字段。
+   */
+  const relPathOf = (tab: NoteTab): string =>
+    tab.relPath !== undefined && tab.relPath !== '' ? tab.relPath : (tree?.notes.find((item) => item.id === tab.noteId)?.relPath ?? tab.path)
   const selected: TreeNote | null =
     activeTab !== null && activeTab.ref !== true
-      ? { id: activeTab.noteId, title: activeTab.title, path: activeTab.path, relPath: activeTab.path, collectionId: null, pinned: false }
+      ? { id: activeTab.noteId, title: activeTab.title, path: activeTab.path, relPath: relPathOf(activeTab), collectionId: null, pinned: false }
       : null
   const selectedRef: TreeRef | null =
     activeTab !== null && activeTab.ref === true
@@ -146,7 +154,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           noteId: activeTab.noteId,
           title: activeTab.title,
           path: activeTab.path,
-          relPath: activeTab.path,
+          relPath: relPathOf(activeTab),
           workspaceKey: activeTab.workspaceKey,
           workspaceName: '',
           collectionId: null,
@@ -161,6 +169,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         workspaceKey: ref?.workspaceKey ?? layoutKey,
         noteId: note.id,
         path: note.path,
+        relPath: ref?.relPath ?? note.relPath,
         title: note.title,
         ...(ref === undefined ? {} : { ref: true as const }),
       }
@@ -213,7 +222,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             tabs: pane.tabs.map((tab) => {
               if (tab.ref === true) return tab
               const note = next.notes.find((item) => item.id === tab.noteId)
-              return note === undefined ? tab : { ...tab, title: note.title, path: note.path }
+              // 顺带把老布局缺的 relPath 补上(引用载荷要用工作区相对路径)
+              return note === undefined ? tab : { ...tab, title: note.title, path: note.path, relPath: note.relPath }
             }),
           })),
         }
@@ -345,27 +355,41 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     [t],
   )
 
+  /**
+   * 最新的 `refresh`(**不要**直接把它写进下面两个 effect 的依赖里)。
+   *
+   * 踩过的坑:轮询 effect 依赖 `refresh`,而 `refresh` 的依赖链里(经 `openNote`)
+   * 有宿主每次渲染都新建的东西 —— 于是**宿主侧边栏一重渲染,定时器就被清掉重建**,
+   * 只要重渲染比 4s 更频繁,轮询就永远等不到那一次 tick(实测:10 秒 0 个请求,
+   * 表现为"外部改动不刷新、每几秒闪一下")。
+   */
+  const refreshRef = useRef(refresh)
   useEffect(() => {
-    void refresh()
+    refreshRef.current = refresh
   }, [refresh])
+
+  // 挂载时先拉一次(只做一次,与 refresh 身份无关)
+  useEffect(() => {
+    void refreshRef.current()
+  }, [])
 
   // 回到这个窗口时对一次账(外部改名/删除不必等手动刷新)
   useEffect(() => {
-    const onFocus = (): void => void refresh()
+    const onFocus = (): void => void refreshRef.current()
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-  }, [refresh])
+  }, [])
 
   // 轻量轮询:Host 侧的监视器(debounce 400ms)会把外部改动对完账并更新缓存,
   // 但服务端没有推送通道,所以这里只拉**便宜**的 tree(不触发扫描)来接住它。
-  // 页面不可见时停掉,不打扰。
+  // 页面不可见时停掉,不打扰。定时器**只挂一次**,不随渲染重建。
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return
-      void refresh()
+      void refreshRef.current()
     }, 4000)
     return () => window.clearInterval(timer)
-  }, [refresh])
+  }, [])
 
   useEffect(() => {
     if (compose !== null && inputRef.current !== null) {
@@ -1308,6 +1332,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             getKnownTitles={knownTitles}
             activePane={activePane}
             onFocusPane={setActivePane}
+            relPathOf={relPathOf}
             onQuickOpen={(pane) => {
               setQuickOpenPane(pane)
               setQuickOpen(true)

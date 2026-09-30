@@ -40,18 +40,25 @@ export interface EditorAreaProps {
   activePane: 'p1' | 'p2'
   onFocusPane: (id: 'p1' | 'p2') => void
   onQuickOpen: (pane: 'p1' | 'p2') => void
+  /**
+   * 取一个标签的工作区相对路径。
+   *
+   * 由 NotesPane 提供(它手里有树,树总是带 relPath):老布局里的标签没存 relPath,
+   * 而引用载荷要的是相对路径 —— 在这里兜住,新旧标签都对。
+   */
+  relPathOf: (tab: NoteTab) => string
   /** 每栏的源码/预览模式(分屏时各管各的)。 */
   sourceModeByPane: Record<'p1' | 'p2', boolean>
   onToggleSourceMode: (id: 'p1' | 'p2') => void
 }
 
 /** 标签 → EditorPane 需要的 TreeNote(标签只存最小字段,别的用默认值补)。 */
-function asTreeNote(tab: NoteTab): TreeNote {
+function asTreeNote(tab: NoteTab, relPath: (tab: NoteTab) => string): TreeNote {
   return {
     id: tab.noteId,
     title: tab.title,
     path: tab.path,
-    relPath: tab.path,
+    relPath: relPath(tab),
     collectionId: null,
     pinned: false,
   }
@@ -182,7 +189,7 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
                 key={tab.key}
                 t={t}
                 sessionId={props.sessionId}
-                note={asTreeNote(tab)}
+                note={asTreeNote(tab, props.relPathOf)}
                 onOutline={outlineFor(tab.key)}
                 onCursorLine={cursorFor(tab.key)}
                 onWikiLink={props.onWikiLink}
