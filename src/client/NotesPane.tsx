@@ -530,6 +530,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     onRenameNote={commitNoteRename}
                     onRenameCollection={commitCollectionRename}
                     onCancelRename={() => setRenamingKey(null)}
+                    onStartRename={(key) => setRenamingKey(key)}
                     onSelectNote={(note) => {
                       setSelected(note)
                       setSelectedRef(null)

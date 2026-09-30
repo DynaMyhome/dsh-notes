@@ -153,8 +153,9 @@ export function decorateFromTree(
     text,
     selection: selectionRanges(state),
     knownTitles: getKnownTitles?.() ?? new Set<string>(),
-    // 预览模式:永不还原源码(Typora 手感)—— 标记一直隐藏,光标进入也不露
-    reveal: false,
+    // Typora 式:光标进入时**行内标记与公式**展开成源码;表格/代码块/图片这类块级
+    // 结构由 StateField 的 widget 兜住,永远保持渲染(不是所有都展开,也不是都不展开)
+    reveal: true,
   })
   const ranges = []
   for (const description of descriptions) {

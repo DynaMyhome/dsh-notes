@@ -55,6 +55,8 @@ export interface TreePaneProps {
   onRenameCollection?: (id: string, name: string) => void
   /** 取消行内改名。 */
   onCancelRename?: () => void
+  /** 右键菜单触发改名(把该行切进行内编辑)。 */
+  onStartRename?: (key: string) => void
   toolbar?: React.ReactNode
   header?: React.ReactNode
   /** 就地新建输入条:渲染成树里的**一行**(在目标层级末尾),而不是顶栏压下来。 */
@@ -671,6 +673,7 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
               return (
                 <>
                   {item(note.pinned ? t('menu.unpin') : t('menu.pin'), () => props.onPin(note, !note.pinned))}
+                  {item(t('menu.rename'), () => props.onStartRename?.(menu.row.key))}
                   {item(t('menu.copyPath'), () => props.onCopyPath(note.path, note.relPath))}
                   {item(t('menu.reveal'), () => props.onReveal(note.relPath))}
                   {item(t('menu.newNoteHere'), () => props.onNewNote(menu.row.parentId ?? null))}

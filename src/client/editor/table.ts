@@ -198,7 +198,7 @@ export function buildTableDecorations(state: EditorState): DecorationSet {
       // 代码围栏:渲染成卡片(顶栏 = 语言 + 复制按钮,正文 = 等宽代码)
       if (node.name === 'FencedCode') {
         const source = state.doc.sliceString(node.from, node.to)
-        ranges.push(Decoration.replace({ widget: new CodeCardWidget(source), block: true }).range(node.from, node.to))
+        ranges.push(Decoration.replace({ widget: new CodeCardWidget(source, node.from), block: true }).range(node.from, node.to))
       }
     },
   })
@@ -272,7 +272,10 @@ function paintCode(target: HTMLElement, code: string, language: string): void {
  * 复制按钮走剪贴板,复制的是去掉围栏后的纯代码。
  */
 class CodeCardWidget extends WidgetType {
-  constructor(readonly source: string) {
+  constructor(
+    readonly source: string,
+    readonly from: number,
+  ) {
     super()
   }
 
@@ -299,6 +302,38 @@ class CodeCardWidget extends WidgetType {
     const label = document.createElement('span')
     label.className = 'dsh-cm-code-lang-label'
     label.textContent = language === '' ? 'text' : language
+    label.title = '点击修改语言'
+    // 点语言名 → 就地改围栏首行(方便换语言,不用切源码模式)
+    label.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      const first = this.source.split('\n')[0] ?? ''
+      const fence = /^\s*(```|~~~)/.exec(first)?.[1] ?? '```'
+      const box = document.createElement('input')
+      box.className = 'dsh-cm-code-lang-input'
+      box.value = language
+      const commit = (save: boolean): void => {
+        const next = box.value.trim()
+        if (save && next !== language) {
+          view.dispatch({ changes: { from: this.from, to: this.from + first.length, insert: fence + next } })
+        } else {
+          bar.replaceChild(label, box)
+        }
+        view.focus()
+      }
+      box.addEventListener('keydown', (keyEvent) => {
+        if (keyEvent.key === 'Enter') {
+          keyEvent.preventDefault()
+          commit(true)
+        } else if (keyEvent.key === 'Escape') {
+          keyEvent.preventDefault()
+          commit(false)
+        }
+      })
+      box.addEventListener('blur', () => commit(true))
+      bar.replaceChild(box, label)
+      box.focus()
+      box.select()
+    })
     const copy = document.createElement('button')
     copy.type = 'button'
     copy.className = 'dsh-cm-code-copy'
@@ -317,6 +352,41 @@ class CodeCardWidget extends WidgetType {
     const codeEl = document.createElement('code')
     paintCode(codeEl, code, language)
     pre.appendChild(codeEl)
+    // 就地编辑:点正文 → 换成 textarea(提交后写回围栏内的正文区间)
+    pre.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      const box = document.createElement('textarea')
+      box.className = 'dsh-cm-code-input'
+      box.value = code
+      // 行数贴合原代码 → 进入编辑时高度不变,下面的内容不会被顶走(踩过)
+      box.rows = Math.max(1, code.split('\n').length)
+      const lines = this.source.split('\n')
+      const first = lines[0] ?? ''
+      const last = lines[lines.length - 1] ?? ''
+      const bodyFrom = this.from + first.length + 1
+      const bodyTo = /^\s*(?:```|~~~)/.test(last) ? this.from + this.source.length - last.length - 1 : this.from + this.source.length
+      let done = false
+      const commit = (save: boolean): void => {
+        if (done) return
+        done = true
+        if (save && box.value !== code) {
+          view.dispatch({ changes: { from: bodyFrom, to: bodyTo, insert: box.value } })
+        } else {
+          pre.replaceChildren(codeEl)
+        }
+        view.focus()
+      }
+      box.addEventListener('keydown', (keyEvent) => {
+        if (keyEvent.key === 'Escape' || (keyEvent.key === 'Enter' && (keyEvent.metaKey || keyEvent.ctrlKey))) {
+          keyEvent.preventDefault()
+          commit(keyEvent.key !== 'Escape')
+        }
+      })
+      box.addEventListener('blur', () => commit(true))
+      pre.replaceChildren(box)
+      box.focus()
+      box.setSelectionRange(box.value.length, box.value.length)
+    })
     card.append(bar, pre)
     return card
   }

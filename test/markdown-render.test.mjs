@@ -106,7 +106,7 @@ test('链接:文字着色,非还原态连方括号与地址一起隐藏', () => 
   assert.equal(only(inside, HIDE).length, 0)
 })
 
-test('图片:行内 widget(不跨行替换),光标进去还原成链接样式', () => {
+test('图片:行内 widget(不跨行替换),光标进去**展开成源码**', () => {
   const text = '前 ![示意图](img/a.png) 后\n'
   const descs = decide(text)
   const widgets = only(descs, WIDGET)
@@ -115,11 +115,12 @@ test('图片:行内 widget(不跨行替换),光标进去还原成链接样式', 
   assert.deepEqual(widgets[0].data, { alt: '示意图', destination: 'img/a.png' })
 
   const revealed = decide(text, [{ from: 5, to: 5 }])
+  // 展开 = 该区间**不加任何装饰**,直接看到 `![示意图](img/a.png)`
   assert.equal(only(revealed, WIDGET).length, 0)
-  assert.deepEqual(only(revealed, MARK).map((item) => item.cls), ['link'])
+  assert.equal(only(revealed, MARK).length, 0)
 })
 
-test('任务列表:复选框 widget(勾选状态),`-` 一起隐藏', () => {
+test('任务列表:复选框 widget(勾选状态),`-` 一起隐藏(结构标记,光标进去也不展开)', () => {
   const text = '- [ ] 未完成\n- [x] 已完成\n'
   const descs = decide(text)
   const tasks = only(descs, WIDGET).filter((item) => item.widget === 'task')
@@ -128,8 +129,10 @@ test('任务列表:复选框 widget(勾选状态),`-` 一起隐藏', () => {
   assert.equal(only(descs, WIDGET).filter((item) => item.widget === 'bullet').length, 0)
   assert.deepEqual(only(descs, HIDE).map((item) => text.slice(item.from, item.to)), ['-', '-'])
 
+  // 光标进任务行:复选框**依然是复选框**(结构标记不展开),只把 `-` 留着隐藏
   const onTask = decide(text, [{ from: 3, to: 3 }])
-  assert.equal(only(onTask, WIDGET).filter((item) => item.widget === 'task').length, 1)
+  assert.equal(only(onTask, WIDGET).filter((item) => item.widget === 'task').length, 2)
+  assert.deepEqual(only(onTask, HIDE).map((item) => text.slice(item.from, item.to)), ['-', '-'])
 })
 
 test('无序列表:`-` 渲染成项目符号;有序列表保留数字', () => {
@@ -141,9 +144,10 @@ test('无序列表:`-` 渲染成项目符号;有序列表保留数字', () => {
   assert.equal(only(ordered, WIDGET).length, 0)
   assert.equal(only(ordered, HIDE).length, 0)
 
-  // 光标在列表行 → 显示源码符号
+  // 光标在列表行:项目符号**保持渲染**(与 `>` 一致,结构标记不展开)
   const revealed = decide('- 甲\n', [{ from: 2, to: 2 }])
-  assert.equal(only(revealed, WIDGET).length, 0)
+  assert.equal(only(revealed, WIDGET).filter((item) => item.widget === 'bullet').length, 1)
+  assert.equal(only(revealed, HIDE).length, 0)
 })
 
 test('引用:整块行装饰,`>` 非还原态隐藏', () => {
