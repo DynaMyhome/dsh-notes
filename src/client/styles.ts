@@ -91,6 +91,14 @@ export const CSS = [
   '.dsh-notes-toolbar .dsh-notes-btn{min-width:24px;padding:2px 0;font-size:16px;line-height:1.2;text-align:center}',
 
   /* 纳入管理面板(候选/杂项) */
+  '.dsh-notes-ws{appearance:none;border:none;background:transparent;color:inherit;font:inherit;font-size:11px;padding:0 2px;margin-right:4px;cursor:pointer;border-radius:4px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+  '.dsh-notes-ws:hover{background:var(--dsw-alias-bg-layer-2)}',
+  '.dsh-notes-wsmenu{position:absolute;z-index:60;top:29px;left:8px;min-width:260px;max-height:60%;overflow:auto;display:flex;flex-direction:column;padding:4px 0;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-overlay);box-shadow:0 12px 30px rgba(0,0,0,.28)}',
+  '.dsh-notes-wsmenu-item{display:flex;align-items:center;gap:8px;width:100%;appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;padding:5px 10px;cursor:pointer}',
+  '.dsh-notes-wsmenu-item:hover{background:var(--dsw-alias-bg-layer-2)}',
+  '.dsh-notes-wsmenu-on{font-weight:600}',
+  '.dsh-notes-wsmenu-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+  '.dsh-notes-wsmenu-add{padding:4px 8px;border-top:1px solid var(--dsw-alias-border-l1)}',
   '.dsh-notes-panel-overlay{position:absolute;inset:0;z-index:70;display:flex;align-items:flex-start;justify-content:center;padding-top:34px;background:color-mix(in srgb, var(--dsw-alias-bg-base) 55%, transparent)}',
   '.dsh-notes-panel{width:96%;max-width:760px;height:80%;display:flex;flex-direction:column;border-radius:10px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-overlay);box-shadow:0 16px 40px rgba(0,0,0,.28);overflow:hidden}',
   '.dsh-notes-panel-head{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--dsw-alias-border-l1)}',
