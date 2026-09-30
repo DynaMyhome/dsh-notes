@@ -13,7 +13,11 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   call,
   fetchFiles,
+  fetchWorkspaces,
+  openWorkspace,
+  setActiveWorkspace,
   setScanRoots,
+  type WorkspaceInfo,
   fetchTrash,
   fetchTree,
   ignorePaths,
@@ -91,6 +95,11 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [filesScan, setFilesScan] = useState<FileScan | null>(null)
   const [filesLoading, setFilesLoading] = useState(false)
   const [filesError, setFilesError] = useState<string | null>(null)
+  /** 当前笔记区域在看哪个工作区(null = 会话自己的工作区)。 */
+  const [workspaceKey, setWorkspaceKey] = useState<string | null>(null)
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([])
+  const [wsMenu, setWsMenu] = useState(false)
+  const [wsDraft, setWsDraft] = useState('')
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([])
   const [trashRoot, setTrashRoot] = useState('')
   const [trashLoading, setTrashLoading] = useState(false)
@@ -325,6 +334,87 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       void run('unregister', { noteId: note.id }, () => setStatus(t('status.unregistered')))
     },
     [run, t],
+  )
+
+  /**
+   * 切到某个已登记工作区(`null` = 回到会话自己的工作区)。
+   *
+   * 先改 api 层的活跃工作区(之后所有读写都带上它),清掉与旧工作区绑定的界面状态,
+   * 再重新取树 —— 打开着的笔记属于旧工作区,必须一起清掉。
+   */
+  const applyWorkspace = useCallback(
+    (key: string | null) => {
+      setActiveWorkspace(key)
+      setWorkspaceKey(key)
+      setWsMenu(false)
+      setSelected(null)
+      setSelectedRef(null)
+      setFilesScan(null)
+      if (sessionId !== '') {
+        try {
+          if (key === null) window.localStorage.removeItem(`dsh-notes:ws:${sessionId}`)
+          else window.localStorage.setItem(`dsh-notes:ws:${sessionId}`, key)
+        } catch {
+          /* 隐私模式等:存不了就算了 */
+        }
+      }
+      void refresh(true)
+    },
+    [refresh, sessionId],
+  )
+
+  /** 载入已登记工作区列表(并恢复上次选择)。 */
+  const loadWorkspaces = useCallback(async (): Promise<WorkspaceInfo[]> => {
+    if (sessionId === '') return []
+    try {
+      const result = await fetchWorkspaces(sessionId)
+      setWorkspaces(result.workspaces)
+      let saved: string | null = null
+      try {
+        saved = window.localStorage.getItem(`dsh-notes:ws:${sessionId}`)
+      } catch {
+        saved = null
+      }
+      if (saved !== null && result.workspaces.some((item) => item.key === saved)) {
+        setActiveWorkspace(saved)
+        setWorkspaceKey(saved)
+      } else if (saved !== null) {
+        // 上次的工作区已经不在索引里了 → 清掉,别让界面卡在一个不存在的地方
+        try {
+          window.localStorage.removeItem(`dsh-notes:ws:${sessionId}`)
+        } catch {
+          /* 同上 */
+        }
+      }
+      return result.workspaces
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+      return []
+    }
+  }, [sessionId])
+
+  useEffect(() => {
+    void loadWorkspaces()
+  }, [loadWorkspaces])
+
+  /** 打开一个绝对路径作为工作区(登记后切过去)。 */
+  const openWorkspaceRoot = useCallback(
+    async (root: string) => {
+      if (sessionId === '' || root.trim() === '') return
+      setBusy(true)
+      try {
+        const info = await openWorkspace(sessionId, root.trim())
+        await loadWorkspaces()
+        applyWorkspace(info.key)
+        setStatus(t('status.workspaceOpened').replace('{p}', info.name))
+        setWsDraft('')
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [applyWorkspace, loadWorkspaces, sessionId, t],
   )
 
   /** 读一次三类分类(打开面板 / 重扫 / 操作完之后)。 */
@@ -787,6 +877,17 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       <div className="dsh-notes-header">
         <span className="dsh-notes-title">{t('tab.title')}</span>
         <span className="dsh-notes-sub">
+          <button
+            type="button"
+            className="dsh-notes-ws"
+            title={t('ws.switch')}
+            aria-expanded={wsMenu}
+            onClick={() => setWsMenu((open) => !open)}
+          >
+            {(workspaceKey === null
+              ? workspaces.find((item) => item.isSession)?.name ?? t('ws.sessionWorkspace')
+              : workspaces.find((item) => item.key === workspaceKey)?.name ?? workspaceKey) + ' ▾'}
+          </button>
           {sessionId === ''
             ? t('status.noSession')
             : tree === null
@@ -797,6 +898,37 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         </span>
         <span className="dsh-notes-spacer" />
       </div>
+      {wsMenu ? (
+        <div className="dsh-notes-wsmenu" role="menu">
+          {workspaces.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              role="menuitem"
+              className={`dsh-notes-wsmenu-item${item.key === workspaceKey || (workspaceKey === null && item.isSession) ? ' dsh-notes-wsmenu-on' : ''}`}
+              title={item.root}
+              onClick={() => applyWorkspace(item.isSession && workspaceKey === null ? null : item.key)}
+            >
+              <span className="dsh-notes-wsmenu-name">{item.name}{item.isSession ? ` · ${t('ws.sessionTag')}` : ''}</span>
+              <span className="dsh-notes-count">{item.notes}</span>
+            </button>
+          ))}
+          <div className="dsh-notes-wsmenu-add">
+            <input
+              className="dsh-notes-input"
+              placeholder={t('ws.openPath')}
+              value={wsDraft}
+              onChange={(event) => setWsDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void openWorkspaceRoot(wsDraft)
+              }}
+            />
+          </div>
+          <button type="button" className="dsh-notes-wsmenu-item" onClick={() => applyWorkspace(null)}>
+            {t('ws.backToSession')}
+          </button>
+        </div>
+      ) : null}
       {status !== null ? (
         <div className="dsh-notes-status" onAnimationEnd={() => setStatus(null)}>
           {status}

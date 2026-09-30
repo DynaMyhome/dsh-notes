@@ -147,9 +147,48 @@ async function unwrap(response: Response): Promise<any> {
   return envelope.value
 }
 
+/**
+ * 笔记区域当前在看哪个工作区(`null` = 用会话自己的工作区)。
+ *
+ * 放在模块级是为了让**所有**写调用自动带上它 —— 否则每加一个动作都要记得传,
+ * 迟早漏一个(漏了就会写到会话自己的工作区去)。
+ */
+let activeWorkspaceKey: string | null = null
+
+/** 设置当前工作区(Host 侧只认已登记的 key)。 */
+export function setActiveWorkspace(key: string | null): void {
+  activeWorkspaceKey = key
+}
+
+/** 已登记的工作区(切换器用)。 */
+export interface WorkspaceInfo {
+  key: string
+  root: string
+  name: string
+  notesRoot: string
+  notes: number
+  lastUsedAt: number
+  isSession: boolean
+}
+
+/** 列出已登记工作区 + 会话自己的工作区。 */
+export async function fetchWorkspaces(
+  sessionId: string,
+): Promise<{ current: string | null; workspaces: WorkspaceInfo[] }> {
+  const query = new URLSearchParams({ sessionId })
+  const response = await fetch(`${PREFIX}/workspaces?${query.toString()}`, { credentials: 'same-origin' })
+  return (await unwrap(response)) as { current: string | null; workspaces: WorkspaceInfo[] }
+}
+
+/** 打开一个绝对路径作为笔记工作区(登记到索引,之后所有调用都用它)。 */
+export async function openWorkspace(sessionId: string, root: string): Promise<{ key: string; name: string }> {
+  return call('workspace/open', { sessionId, root })
+}
+
 /** 读整棵树。 */
 export async function fetchTree(sessionId: string, force = false): Promise<Tree> {
   const query = new URLSearchParams({ sessionId })
+  if (activeWorkspaceKey !== null) query.set('workspaceKey', activeWorkspaceKey)
   if (force) query.set('force', '1')
   const response = await fetch(`${PREFIX}/tree?${query.toString()}`, { credentials: 'same-origin' })
   return (await unwrap(response)) as Tree
@@ -166,6 +205,7 @@ export async function fetchFiles(
   options: { force?: boolean; query?: string; folder?: string; sort?: 'recent' | 'path'; limit?: number } = {},
 ): Promise<FileScan> {
   const query = new URLSearchParams({ sessionId })
+  if (activeWorkspaceKey !== null) query.set('workspaceKey', activeWorkspaceKey)
   if (options.force) query.set('force', '1')
   if (options.query) query.set('query', options.query)
   if (options.folder) query.set('folder', options.folder)
@@ -285,11 +325,12 @@ export async function importNote(
 }
 
 /** 调一条写路由。 */export async function call<T = any>(action: string, payload: Record<string, unknown>): Promise<T> {
+  const body = activeWorkspaceKey === null ? payload : { workspaceKey: activeWorkspaceKey, ...payload }
   const response = await fetch(`${PREFIX}/${action}`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   })
   return (await unwrap(response)) as T
 }
@@ -302,6 +343,7 @@ export async function uploadAsset(
   bytes: Blob,
 ): Promise<{ absolutePath: string; relative: string; markdown: string }> {
   const query = new URLSearchParams({ sessionId, name })
+  if (activeWorkspaceKey !== null) query.set('workspaceKey', activeWorkspaceKey)
   if (noteId !== null) query.set('noteId', noteId)
   const response = await fetch(`${PREFIX}/asset?${query.toString()}`, {
     method: 'POST',
