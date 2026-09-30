@@ -246,8 +246,14 @@ export function buildTableDecorations(state: EditorState, sourceMode: boolean = 
   }
   const tree = ensureSyntaxTree(state, state.doc.length, 60)
   if (tree === null) return RangeSet.of(ranges, true)
+  /** 已经整块替换掉的表格范围(夹过的)。遍历时据此跳过**表格自身**,而不是跳过解析器节点的整段。 */
+  const tableRanges: { from: number; to: number }[] = []
   tree.iterate({
     enter: (node) => {
+      // 表格内部的节点不生成行内装饰。注意判据用的是**夹过的**范围:解析器的 Table 节点
+      // 会把紧跟表格的那一行也算进来,若按 node.to 跳过,那一行永远不会被装饰
+      // (用户实测:表格下一行的 `[[链接]]` 保持原文,别处同样的链接正常)。
+      if (tableRanges.some((range) => node.from >= range.from && node.from < range.to)) return false
       // 公式块 `$$ … $$`:**独占整行(可多行)就渲染成块级 widget,前后不必空行**。
       // 必须在 StateField:插件层不能跨行替换。判据是"节点从行首开始、到行尾结束",
       // 不能要求"整个 Paragraph 就是一个公式" —— `$$` 紧挨着正文时整段是一个
@@ -276,6 +282,9 @@ export function buildTableDecorations(state: EditorState, sourceMode: boolean = 
         const model = parseTable(source, range.from)
         if (model.header.length === 0) return
         ranges.push(Decoration.replace({ widget: new TableWidget(model, range.from), block: true }).range(range.from, range.to))
+        tableRanges.push(range)
+        // **不 return**:夹取点之后的内容(例如紧跟表格的那一行)还要继续装饰;
+        // 表格自身由上面的 tableRanges 判据挡掉。
         return
       }
       // 代码围栏:渲染成卡片(顶栏 = 语言 + 复制按钮,正文 = 等宽代码);
