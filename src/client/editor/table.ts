@@ -120,6 +120,7 @@ class TableWidget extends WidgetType {
         view.focus()
       }
       input.addEventListener('keydown', (keyEvent) => {
+        keyEvent.stopPropagation()
         if (keyEvent.key === 'Enter') {
           keyEvent.preventDefault()
           commit(true)
@@ -164,7 +165,8 @@ class TableWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean {
-    return false
+    // widget 内部有自己的交互(输入框/复选框),不让 CM6 再处理这些事件
+    return true
   }
 }
 
@@ -321,6 +323,7 @@ class CodeCardWidget extends WidgetType {
         view.focus()
       }
       box.addEventListener('keydown', (keyEvent) => {
+        keyEvent.stopPropagation()
         if (keyEvent.key === 'Enter') {
           keyEvent.preventDefault()
           commit(true)
@@ -378,6 +381,7 @@ class CodeCardWidget extends WidgetType {
         view.focus()
       }
       box.addEventListener('keydown', (keyEvent) => {
+        keyEvent.stopPropagation()
         if (keyEvent.key === 'Escape' || (keyEvent.key === 'Enter' && (keyEvent.metaKey || keyEvent.ctrlKey))) {
           keyEvent.preventDefault()
           commit(keyEvent.key !== 'Escape')
@@ -397,7 +401,8 @@ class CodeCardWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean {
-    return false
+    // widget 内部有自己的交互(输入框/复选框),不让 CM6 再处理这些事件
+    return true
   }
 }
 

@@ -60,7 +60,8 @@ class BulletWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean {
-    return false
+    // widget 内部有自己的交互(输入框/复选框),不让 CM6 再处理这些事件
+    return true
   }
 }
 
@@ -91,7 +92,8 @@ class TaskWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean {
-    return false
+    // widget 内部有自己的交互(输入框/复选框),不让 CM6 再处理这些事件
+    return true
   }
 }
 
@@ -123,7 +125,8 @@ class ImageWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean {
-    return false
+    // widget 内部有自己的交互(输入框/复选框),不让 CM6 再处理这些事件
+    return true
   }
 }
 
@@ -239,6 +242,7 @@ class MathWidget extends WidgetType {
   }
 
   ignoreEvent(): boolean {
-    return false
+    // widget 内部有自己的交互(输入框/复选框),不让 CM6 再处理这些事件
+    return true
   }
 }
