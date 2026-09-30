@@ -128,7 +128,14 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   /** 一次性提示(如「已恢复 dsh-note-id」),3 秒后自动消失。 */
   const [notice, setNotice] = useState<string | null>(null)
   /** 右键菜单(位置 + 打开时的选区快照)。 */
-  const [menu, setMenu] = useState<{ x: number; y: number; from: number; to: number } | null>(null)
+  const [menu, setMenu] = useState<{
+    x: number
+    y: number
+    from: number
+    to: number
+    /** 点在表格里时带上:这块表的源范围与该单元格的行/列。 */
+    table?: { from: number; to: number; row: number; col: number }
+  } | null>(null)
   const [docPath, setDocPath] = useState<string | null>(null)
   const [length, setLength] = useState(0)
   /** 源码模式(Typora 式:默认预览,标记全隐藏;要看/改源码时切过来)。 */
@@ -397,10 +404,25 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   )
 
   /** 右键菜单:引用此处 + 文本格式 / 段落设置 / 插入(照 Obsidian 1.5 的原生三组)。 */
-  const menuEntries = (snapshot: { from: number; to: number }): MenuEntry[] => {
+  const menuEntries = (snapshot: { from: number; to: number; table?: { from: number; to: number; row: number; col: number } }): MenuEntry[] => {
     const editor = editorRef.current
     if (editor === null) return []
     const text = editor.getDoc()
+    // 表格内右键:先给"插行/插列/删行/删列"(Typora 的手感)
+    if (snapshot.table !== undefined && snapshot.table.to > snapshot.table.from) {
+      const spec = snapshot.table
+      const run = (kind: 'rowAbove' | 'rowBelow' | 'colLeft' | 'colRight' | 'rowDelete' | 'colDelete'): (() => void) => () =>
+        tableAction(spec.from, spec.to, spec.row, spec.col, kind)
+      return [
+        { id: 'tRowAbove', label: t('table.rowAbove'), action: run('rowAbove') },
+        { id: 'tRowBelow', label: t('table.rowBelow'), action: run('rowBelow') },
+        { id: 'tColLeft', label: t('table.colLeft'), action: run('colLeft') },
+        { id: 'tColRight', label: t('table.colRight'), action: run('colRight') },
+        { id: 'tSep', separator: true },
+        { id: 'tRowDelete', label: t('table.rowDelete'), action: run('rowDelete') },
+        { id: 'tColDelete', label: t('table.colDelete'), action: run('colDelete') },
+      ]
+    }
     const run = (action: (handle: EditorHandle) => void): (() => void) => () => apply(action)
     const reference = (): void => {
       void copyText(
@@ -469,6 +491,61 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       { id: 'redo', label: t('editor.redo'), action: run((e) => historyRedo(e.view)) },
     ]
   }
+
+  /**
+   * 表格操作(右键表内):插/删行与列**直接改源码**那一块表。
+   *
+   * 为什么按行字符串改而不是走 model:模型里没有"列"的整列偏移,而这一块表的
+   * 源码就是若干行 `| a | b |` —— 按行切最直观,也不会动到表格以外的内容。
+   */
+  const tableAction = useCallback(
+    (from: number, to: number, rowIndex: number, colIndex: number, kind: 'rowAbove' | 'rowBelow' | 'colLeft' | 'colRight' | 'rowDelete' | 'colDelete') => {
+      const editor = editorRef.current
+      if (editor === null) return
+      const view = editor.view
+      const block = view.state.sliceDoc(from, to)
+      const lines = block.split('\n')
+      if (lines.length < 2) return
+      const split = (line: string): string[] => line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((cell) => cell.trim())
+      const build = (cells: string[]): string => `| ${cells.map((cell) => cell || '   ').join(' | ')} |`
+      const header = split(lines[0])
+      const cols = header.length
+      const body = lines.slice(2)
+      const blank = Array.from({ length: cols }, () => '')
+      let next: string[] = lines
+      if (kind === 'rowAbove' || kind === 'rowBelow') {
+        const at = Math.max(0, rowIndex - 1) + (kind === 'rowBelow' ? 1 : 0)
+        const rows = [...body]
+        rows.splice(at, 0, build(blank))
+        next = [lines[0], lines[1], ...rows]
+      } else if (kind === 'rowDelete') {
+        if (rowIndex <= 0) return // 表头不删
+        const rows = [...body]
+        rows.splice(rowIndex - 1, 1)
+        next = [lines[0], lines[1], ...rows]
+      } else if (kind === 'colLeft' || kind === 'colRight') {
+        const at = colIndex + (kind === 'colRight' ? 1 : 0)
+        const add = (line: string, isDelim: boolean): string => {
+          const cells = split(line)
+          cells.splice(at, 0, isDelim ? '---' : '')
+          return build(cells)
+        }
+        next = [add(lines[0], false), add(lines[1], true), ...body.map((line) => add(line, false))]
+      } else if (kind === 'colDelete') {
+        if (cols <= 1) return
+        const drop = (line: string): string => {
+          const cells = split(line)
+          cells.splice(colIndex, 1)
+          return build(cells)
+        }
+        next = [drop(lines[0]), drop(lines[1]), ...body.map((line) => drop(line))]
+      }
+      view.dispatch({ changes: { from, to, insert: next.join('\n') } })
+      view.focus()
+      setMenu(null)
+    },
+    [],
+  )
 
   const stateText =
     status === 'loading'
@@ -769,6 +846,26 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
             if (editor === null) return
             event.preventDefault()
             const range = editor.view.state.selection.main
+            const cell = (event.target as HTMLElement | null)?.closest?.('.dsh-cm-table') as HTMLElement | null
+            if (cell !== null && cell !== undefined) {
+              const table = cell.tagName === 'TABLE' ? cell : (cell.closest('table') as HTMLElement | null)
+              const tr = (event.target as HTMLElement).closest('tr')
+              const tds = tr === null ? [] : [...tr.children]
+              const index = tds.indexOf((event.target as HTMLElement).closest('td, th') as Element)
+              setMenu({
+                x: event.clientX,
+                y: event.clientY,
+                from: range.from,
+                to: range.to,
+                table: {
+                  from: Number(table?.dataset.dshFrom ?? '0'),
+                  to: Number(table?.dataset.dshTo ?? '0'),
+                  row: tr === null ? 0 : [...(tr.parentElement?.children ?? [])].indexOf(tr),
+                  col: index < 0 ? 0 : index,
+                },
+              })
+              return
+            }
             setMenu({ x: event.clientX, y: event.clientY, from: range.from, to: range.to })
           }}
         />
