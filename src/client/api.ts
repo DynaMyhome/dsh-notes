@@ -48,6 +48,16 @@ export interface TreeUnfiled {
   id: string | null
 }
 
+/** 一次对账/重扫的结果(重扫按钮用它回显"到底扫到了什么")。 */
+export interface ScanReport {
+  at: number
+  scanned: number
+  rebound: number
+  dropped: number
+  unfiled: number
+  truncated: boolean
+}
+
 /** 一棵完整的笔记树。 */
 export interface Tree {
   workspace: { key: string; root: string; name: string; notesRoot: string; notesDir: string }
@@ -58,6 +68,8 @@ export interface Tree {
   unfiledTruncated: boolean
   pinned: string[]
   recent: string[]
+  /** 最近一次扫描的报告;**普通取树(读缓存)时为 null**。 */
+  scanReport?: ScanReport | null
   stats: { notes: number; collections: number; refs: number; unfiled: number }
 }
 

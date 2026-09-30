@@ -56,6 +56,7 @@ async function setup() {
     assetsDir: '.dsh-assets',
     storeDir,
     unfiledDepth: 3,
+    scanTtlMs: 8000,
     unfiledMax: 200,
     autosaveMs: 800,
     pasteImage: 'copy',
