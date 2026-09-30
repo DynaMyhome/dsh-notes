@@ -219,8 +219,14 @@ test('标题 = 文件名:正文里的 H1 改了不影响树上的名字', async 
 /* 三类分类(整个工作区):笔记 / 候选 / 杂项                            */
 /* ------------------------------------------------------------------ */
 
-/** 取工作区键 + 分类结果(测试里高频用)。 */
-async function classifyAll(service, options = {}) {
+/**
+ * 取工作区键 + 分类结果(测试里高频用)。
+ *
+ * 默认把扫描范围设成**整个工作区**(`['']`)—— 生产默认只有 `notesDir`,
+ * 因为本机实测一次 listDir 约 330ms,扫整棵树要按分钟算(见 walkWorkspace 注释)。
+ */
+async function classifyAll(service, options = {}, roots = ['']) {
+  await service.setScanRoots({ sessionId: 'session-1', roots })
   const workspace = await service.workspaceOf('session-1')
   return service.classify(workspace.key, options)
 }
@@ -373,6 +379,34 @@ test('classify 过滤:query / folder / limit', async () => {
     const limited = await classifyAll(service, { limit: 1 })
     assert.equal(limited.candidates.length, 1)
     assert.equal(limited.stats.candidates, 3, 'stats 报的是过滤前的总数(含未登记的 notes/甲.md)')
+  } finally {
+    await cleanup(base, service)
+  }
+})
+
+test('扫描范围:默认只有 notesDir;显式加根才看得见工作区其它目录', async () => {
+  const { base, root, service } = await setup()
+  try {
+    await mkdir(join(root, 'docs', 'design'), { recursive: true })
+    await writeFile(join(root, 'docs', 'design', 'api.md'), '# api\n', 'utf8')
+
+    // 默认:只扫 notes/
+    const workspace = await service.workspaceOf('session-1')
+    const byDefault = await service.classify(workspace.key, { force: true })
+    assert.deepEqual(service.scanRootsOf(service.registry.workspaceOf(workspace.key)), ['notes'])
+    assert.equal(byDefault.candidates.some((file) => file.relPath.startsWith('docs/')), false)
+    assert.equal(byDefault.stats.total, 1, '默认只看得到 notes/ 里的 md')
+
+    // 加一个根:docs/
+    await service.setScanRoots({ sessionId: 'session-1', roots: ['notes', 'docs'] })
+    const withDocs = await service.classify(workspace.key, { force: true })
+    assert.equal(withDocs.candidates.some((file) => file.relPath === 'docs/design/api.md'), true)
+    assert.equal(withDocs.scanRoots.includes('docs'), true)
+
+    // 回到默认
+    await service.setScanRoots({ sessionId: 'session-1', roots: [] })
+    const back = await service.classify(workspace.key, { force: true })
+    assert.equal(back.candidates.some((file) => file.relPath.startsWith('docs/')), false)
   } finally {
     await cleanup(base, service)
   }
