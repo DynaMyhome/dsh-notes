@@ -150,6 +150,9 @@ const HEADING_LINES: Record<string, string> = {
  * @param destination - md 里写的地址。
  * @returns 可用于 `<img src>` 的地址,或 undefined。
  */
+/** 最近一次 mousedown 的位置(用于区分「点击」与「拖选」)。 */
+let pressAt: { x: number; y: number } | null = null
+
 export function resolveImageUrl(documentPath: string | null, destination: string): string | undefined {
   const raw = String(destination ?? '').trim()
   if (raw === '') return undefined
@@ -741,6 +744,7 @@ const theme = EditorView.theme({
     margin: '0',
   },
   '.dsh-cm-code-lang-input': {
+    flex: '1 1 auto',
     width: '7em',
     border: 'none',
     outline: 'none',
@@ -869,14 +873,47 @@ export function createEditor(options: {
       livePreview(options.documentPath, options.getKnownTitles),
       // 块级装饰必须来自 StateField(CM6 禁止插件提供跨行替换):真表格 + 单元格交互
       tableBlocks(),
-      // 点在内容区之外(下方空白/右侧留白):把光标放到文末并聚焦 —— 与 Obsidian 一致。
-      // 点在内容区内不拦(交给 CM6 自己按坐标定位)。
+      // 点击落点校正:
+      //   a) 内容区之外(下方空白/右侧留白)→ 光标落文末(Obsidian 手感);
+      //   b) 内容区内 → 按行盒中点判定行:浏览器默认取最近的文字位置,行高 1.7 时
+      //      指针在同一行里稍微下移就会跳到下一行(用户反馈很反逻辑)。
+      // 只纠正点击(位移 <4px),拖选一律不拦,避免破坏选词/选段。
       EditorView.domEventHandlers({
-        mousedown(event, view) {
+        mousedown(event) {
+          pressAt = { x: event.clientX, y: event.clientY }
+          return false
+        },
+        mouseup(event, view) {
+          const start = pressAt
+          pressAt = null
+          if (start === null) return false
+          if (Math.abs(event.clientY - start.y) > 4 || Math.abs(event.clientX - start.x) > 4) return false
           const target = event.target as HTMLElement | null
-          if (target === null || target.closest('.cm-content') !== null) return false
-          event.preventDefault()
-          view.dispatch({ selection: { anchor: view.state.doc.length } })
+          if (target === null) return false
+          // widget(表格/代码卡片/图片/复选框/项目符号)有自己的交互,不拦
+          if (target.closest('.dsh-cm-table, .dsh-cm-code-card, .dsh-cm-image, .dsh-cm-task, .dsh-cm-bullet') !== null) return false
+          const content = view.contentDOM
+          const contentRect = content.getBoundingClientRect()
+          const outside =
+            event.clientY > contentRect.bottom ||
+            event.clientX > contentRect.right ||
+            event.clientY < contentRect.top ||
+            target.closest('.cm-content') === null
+          if (outside) {
+            view.dispatch({ selection: { anchor: view.state.doc.length } })
+            view.focus()
+            return true
+          }
+          const line = Array.from(content.querySelectorAll('.cm-line')).find((el) => {
+            const rect = el.getBoundingClientRect()
+            return event.clientY >= rect.top && event.clientY <= rect.bottom
+          })
+          if (line === undefined) return false
+          const rect = line.getBoundingClientRect()
+          // 用该行的垂直中点解析位置:指针落在这一行内就归这一行
+          const pos = view.posAtCoords({ x: event.clientX, y: rect.top + rect.height / 2 })
+          if (pos === null) return false
+          view.dispatch({ selection: { anchor: pos } })
           view.focus()
           return true
         },
