@@ -97,3 +97,54 @@ maybe('持久化:loadLayout 在没有 localStorage(或坏数据)时给空布局'
   assert.equal(layout.panes.length, 1)
   assert.deepEqual(layout.panes[0].tabs, [])
 })
+
+maybe('pruneTabsForWorkspace:只删"本工作区里确实没有"的标签(跨工作区/未解析键的都不动)', () => {
+  const wsKey = 'wsA'
+  const other = { ...note('x', 'wsB'), key: 'wsB:n_x' }
+  const legacy = { ...note('y', 'session'), key: 'session:n_y' }
+  let layout = tabs.emptyLayout()
+  layout = tabs.openTab(layout, note('a', wsKey))
+  layout = tabs.openTab(layout, other, { mode: 'tab' })
+  layout = tabs.openTab(layout, legacy, { mode: 'tab' })
+
+  // a 还在索引里 → 一个都不该被删(noteId 就是 note() 里给的 id)
+  let pruned = tabs.pruneTabsForWorkspace(layout, wsKey, ['a'])
+  assert.equal(pruned.panes[0].tabs.length, 3, '别的工作区/旧键的标签不能被误删')
+
+  // a 从索引里消失 → 只删它
+  pruned = tabs.pruneTabsForWorkspace(layout, wsKey, [])
+  assert.deepEqual(pruned.panes[0].tabs.map((tab) => tab.noteId), ['x', 'y'], '只删属于本工作区且已不存在的')
+})
+
+maybe('pruneTabsForWorkspace:第 2 栏空了才收掉', () => {
+  const wsKey = 'wsA'
+  let layout = tabs.openTab(tabs.emptyLayout(), note('a', wsKey))
+  layout = tabs.openTab(layout, note('b', wsKey), { mode: 'split' })
+  assert.equal(layout.panes.length, 2)
+  const pruned = tabs.pruneTabsForWorkspace(layout, wsKey, ['a'])
+  assert.equal(pruned.panes.length, 1, 'b 没了 → 第 2 栏收掉')
+  assert.deepEqual(pruned.panes[0].tabs.map((tab) => tab.noteId), ['a'])
+})
+
+maybe('migrateLayout:只在目标还没有布局时迁移一次', () => {
+  const store = new Map()
+  const storage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, value),
+    removeItem: (key) => store.delete(key),
+  }
+  store.set(tabs.layoutStorageKey('session'), '{"panes":[],"activePane":"p1"}')
+  assert.equal(tabs.migrateLayout('session', 'wsA', storage), true, '应当迁移')
+  assert.equal(storage.getItem(tabs.layoutStorageKey('wsA')), '{"panes":[],"activePane":"p1"}')
+  assert.equal(storage.getItem(tabs.layoutStorageKey('session')), null, '旧键要删掉')
+
+  // 目标已经有自己的布局 → 不动
+  store.set(tabs.layoutStorageKey('session'), '旧的')
+  store.set(tabs.layoutStorageKey('wsB'), '已有的')
+  assert.equal(tabs.migrateLayout('session', 'wsB', storage), false)
+  assert.equal(storage.getItem(tabs.layoutStorageKey('wsB')), '已有的')
+
+  // 源不存在、或 from === to → 不动
+  assert.equal(tabs.migrateLayout('archive', 'wsC', storage), false)
+  assert.equal(tabs.migrateLayout('wsA', 'wsA', storage), false)
+})

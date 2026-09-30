@@ -209,6 +209,65 @@ export function closeSecondPane(layout: LayoutState): LayoutState {
   return next
 }
 
+/**
+ * 按工作区安全地清理标签。
+ *
+ * 与 {@link pruneTabs} 的区别:这个只删**确实属于该工作区、且该工作区的笔记列表里没有**
+ * 的标签。踩过的坑:早先用"当前 layoutKey 算出来的全量集合"当判据,于是
+ * ① 布局还在 `session` 键下、而工作区键已经解析出来时,标签被整批误删
+ * ② 拿到别的工作区的树时,也会把当前标签删掉 —— 表现就是"打开笔记几秒后自己关了"。
+ * @param layout - 当前布局。
+ * @param workspaceKey - 当前工作区键。
+ * @param noteIds - 该工作区当前的笔记 id 集合。
+ * @returns 新布局(可能原样返回)。
+ */
+export function pruneTabsForWorkspace(
+  layout: LayoutState,
+  workspaceKey: string,
+  noteIds: Iterable<string>,
+): LayoutState {
+  const alive = noteIds instanceof Set ? noteIds : new Set(noteIds)
+  const keep = (tab: NoteTab): boolean =>
+    tab.ref === true || tab.workspaceKey !== workspaceKey || alive.has(tab.noteId)
+  const next = cloneLayout(layout)
+  next.panes = next.panes.map((pane) => {
+    const tabs = pane.tabs.filter(keep)
+    return { ...pane, tabs, active: tabs.some((tab) => tab.key === pane.active) ? pane.active : (tabs[0]?.key ?? null) }
+  })
+  const second = paneOf(next, 'p2')
+  if (second !== undefined && second.tabs.length === 0) next.panes = next.panes.filter((pane) => pane.id === 'p1')
+  if (next.activePane === 'p2' && paneOf(next, 'p2') === undefined) next.activePane = 'p1'
+  return next
+}
+
+/**
+ * 把一份布局从一个存储键迁到另一个键(**只在目标还没有自己的布局时**)。
+ *
+ * 用途:挂载瞬间还不知道工作区键,标签会先存到 `session` 键下;等键解析出来时把这
+ * 一份迁过去,否则切键的那一刻标签会"消失"(用户实测的自动关闭)。
+ * @param fromKey - 源键(通常是 `session`)。
+ * @param toKey - 目标工作区键。
+ * @param storage - 可注入的存储(便于单测)。
+ * @returns 是否真的迁移了。
+ */
+export function migrateLayout(
+  fromKey: string,
+  toKey: string,
+  storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null = typeof window === 'undefined' ? null : window.localStorage,
+): boolean {
+  if (storage === null || fromKey === toKey) return false
+  try {
+    if (storage.getItem(layoutStorageKey(toKey)) !== null) return false
+    const source = storage.getItem(layoutStorageKey(fromKey))
+    if (source === null) return false
+    storage.setItem(layoutStorageKey(toKey), source)
+    storage.removeItem(layoutStorageKey(fromKey))
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** 去掉已经不存在的笔记(工作区删了/笔记移出索引了)后重建布局。 */
 export function pruneTabs(layout: LayoutState, alive: (key: string) => boolean): LayoutState {
   const next = cloneLayout(layout)
