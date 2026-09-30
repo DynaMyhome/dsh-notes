@@ -195,6 +195,10 @@ class TableWidget extends WidgetType {
     table.appendChild(body)
     const wrap = document.createElement('div')
     wrap.className = 'dsh-cm-table-wrap'
+    // 把这块表在源码里的范围挂到 DOM 上:右键菜单要靠它把"插行/插列"写回源文档
+    const last = this.model.rows[this.model.rows.length - 1]
+    table.dataset.dshFrom = String(this.from)
+    table.dataset.dshTo = String(last === undefined || last.length === 0 ? this.from : last[last.length - 1].to)
     wrap.appendChild(table)
     return wrap
   }
