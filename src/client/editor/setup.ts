@@ -1172,14 +1172,9 @@ export function createEditor(options: {
       // 行号不一致就用那一行的垂直中点重算。同步(不是下一帧)是为了不干扰随后的拖选;
       // Shift 加选、右键、双击这些一概不插手。
       if (event.button === 0 && !event.shiftKey && event.detail === 1) {
-        const domLine = (target as HTMLElement | null)?.closest?.('.cm-line') as HTMLElement | null
-        if (domLine !== null && domLine !== undefined) {
-          const rect = domLine.getBoundingClientRect()
-          const before = view.state.selection.main.head
-          const fixed = view.posAtCoords({ x: event.clientX, y: rect.top + rect.height / 2 })
-          if (fixed !== null && view.state.doc.lineAt(fixed).number !== view.state.doc.lineAt(before).number) {
-            view.dispatch({ selection: { anchor: fixed } })
-          }
+        const precise = hitTestPosition(view, event.clientX, event.clientY)
+        if (precise !== null && precise !== view.state.selection.main.head) {
+          view.dispatch({ selection: { anchor: precise } })
         }
       }
       return
@@ -1193,6 +1188,51 @@ export function createEditor(options: {
     event.preventDefault()
     view.dispatch({ selection: { anchor: fixDrift(view, event, position) } })
     view.focus()
+  }
+
+  /**
+   * **逐字符命中**:完全绕开 `posAtCoords`。
+   *
+   * 为什么不用它:它按 CM6 的行盒模型换算,而我们的装饰(`[[ ]]`、标题折叠、元数据 chip、
+   * 表格块)会改变真实行高,于是出现一个**约 0.7 行**的系统偏差(用户实测:鼠标在
+   * `端到端` 这一行,光标落到相邻行)。这里改成:
+   * 1. `elementFromPoint` 拿到鼠标下**真实的 `.cm-line`**;
+   * 2. 在这一行的字符范围内二分,用 `coordsAtPos(pos)` 的 left 与鼠标 x 比较,
+   *    求出"鼠标落在第几个字符之前"。
+   * 这两步都不依赖行盒模型,行高/装饰/缩放都不影响。
+   * @param view - 编辑器。
+   * @param x - 鼠标 x(视口坐标)。
+   * @param y - 鼠标 y(视口坐标)。
+   * @returns 文档位置;拿不到(点不在文本行上)返回 null。
+   */
+  function hitTestPosition(view: EditorView, x: number, y: number): number | null {
+    const domLine = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest?.('.cm-line')
+    if (domLine === null || domLine === undefined) return null
+    let start: number
+    try {
+      start = view.posAtDOM(domLine, 0)
+    } catch {
+      return null
+    }
+    const line = view.state.doc.lineAt(start)
+    if (line.from === line.to) return line.from
+    // 二分:找最后一个"左边界 <= 鼠标 x"的字符位置
+    let low = line.from
+    let high = line.to
+    while (low < high) {
+      const mid = Math.floor((low + high + 1) / 2)
+      const box = view.coordsAtPos(mid)
+      if (box === null) break
+      // 软换行时不同视觉行不可比:用 y 先筛掉不在同一视觉行的坐标
+      const sameRow = y >= box.top - 2 && y <= box.bottom + 2
+      if (!sameRow) {
+        high = mid - 1
+        continue
+      }
+      if (box.left <= x) low = mid
+      else high = mid - 1
+    }
+    return low
   }
 
   /**
