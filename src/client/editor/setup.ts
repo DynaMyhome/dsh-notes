@@ -36,6 +36,7 @@ import {
   autocompletion,
   closeBrackets,
   closeBracketsKeymap,
+  acceptCompletion,
   completionKeymap,
   type CompletionContext,
   type CompletionResult,
@@ -700,6 +701,24 @@ const theme = EditorView.theme({
     padding: '1px 0',
   },
   '.dsh-cm-link': { color: 'var(--dsw-alias-brand-primary)', textDecoration: 'none' },
+  // `[[` 补全弹层:与右键菜单同一套悬浮词汇(bg-layer-2 + border + 圆角 8 + 轻阴影),
+  // 选中行用品牌色淡底(默认是浏览器那种纯蓝高亮,很难看)
+  '.cm-tooltip.cm-tooltip-autocomplete': {
+    border: '1px solid var(--dsw-alias-border-l2)',
+    borderRadius: '8px',
+    background: 'var(--dsw-alias-bg-layer-2)',
+    boxShadow: '0 6px 20px rgba(0,0,0,.22)',
+    overflow: 'hidden',
+    fontFamily: 'inherit',
+    fontSize: '12px',
+  },
+  '.cm-tooltip-autocomplete ul': { maxHeight: '220px' },
+  '.cm-tooltip-autocomplete ul li': { padding: '4px 10px', color: 'var(--dsw-alias-label-primary)' },
+  '.cm-tooltip-autocomplete ul li[aria-selected]': {
+    background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent)',
+    color: 'var(--dsw-alias-label-primary)',
+  },
+  '.cm-tooltip-autocomplete .cm-completionLabel': { fontSize: '12px' },
   '.dsh-cm-wiki': {
     color: 'var(--dsw-alias-brand-primary)',
     borderBottom: '1px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 45%, transparent)',
@@ -999,7 +1018,20 @@ export function createEditor(options: {
             if (titles.length === 0) return null
             return {
               from: before.from + 2,
-              options: titles.map((title) => ({ label: title, apply: `${title}]]` })),
+              options: titles.map((title) => ({
+                label: title,
+                // closeBrackets 已经在光标后面自动插了 `]]`,直接 insert `${title}]]`
+                // 会多出两个 `]`(用户实测 `[[未命名]]]`)。这里把紧跟其后的 `]]` 一起吃
+                // 进替换范围,结果恒为 `[[标题]]`。
+                apply: (view: EditorView, _completion: unknown, from: number, to: number) => {
+                  const tail = view.state.sliceDoc(to, Math.min(view.state.doc.length, to + 2))
+                  const eat = tail === ']]' ? 2 : 0
+                  view.dispatch({
+                    changes: { from, to: to + eat, insert: `${title}]]` },
+                    selection: { anchor: from + title.length + 2 },
+                  })
+                },
+              })),
               validFor: /^[^\]\n]*$/,
             }
           },
@@ -1067,6 +1099,9 @@ export function createEditor(options: {
         },
       }),
       keymap.of([
+        // 补全弹层开着时,Tab 就是"选中它"(CM6 默认只绑 Enter;放到最前面才不会被
+        // 表格单元格跳转 / 列表缩进这些 Tab 抢走)
+        { key: 'Tab', run: acceptCompletion },
         // 保存 / 搜索
         { key: 'Mod-s', preventDefault: true, run: () => (options.onSave(), true) },
         { key: 'Mod-f', preventDefault: true, run: openSearchPanel },
