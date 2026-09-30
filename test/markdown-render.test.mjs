@@ -169,6 +169,12 @@ test('代码围栏:首行 codeLang、其余 code,围栏 ``` 隐藏;代码里的�
   )
 })
 
+test('代码围栏:还原态区分围栏两行(codeOpen/codeClose)—— 卡片与源码等高靠它补留白', () => {
+  const text = '```js\nconst a = 1\n```\n'
+  const descs = decide(text, [{ from: 12, to: 12 }]) // 光标落在 `const a = 1` 这一行里
+  assert.deepEqual(only(descs, LINE).map((item) => item.cls), ['codeOpen', 'code', 'codeClose'])
+})
+
 test('表格:表头/分隔行/数据行的行装饰', () => {
   const text = '| A | B |\n| --- | --- |\n| 1 | 2 |\n'
   const descs = decide(text)

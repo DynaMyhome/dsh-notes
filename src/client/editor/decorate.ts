@@ -30,6 +30,10 @@ const LINE_CLASS: Record<string, string> = {
   quote: 'dsh-cm-quote',
   rule: 'dsh-cm-rule',
   code: 'dsh-cm-code-line',
+  // 还原态(光标在代码块里)的两行围栏:除了等宽底,还要靠 code-open/close 的
+  // padding 把卡片顶栏/内边距占掉的高度补回来,做到"展开 ↔ 收起"整块高度不变。
+  codeOpen: 'dsh-cm-code-line dsh-cm-code-open',
+  codeClose: 'dsh-cm-code-line dsh-cm-code-close',
   codeLang: 'dsh-cm-code-lang',
   codeEnd: 'dsh-cm-code-end',
   frontmatter: 'dsh-cm-frontmatter',

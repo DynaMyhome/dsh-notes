@@ -84,6 +84,9 @@ export function parseTable(source: string, base: number): TableModel {
   return { header, rows }
 }
 
+/** 当前打开的单元格输入框(切换单元格时用来避免互相抢焦点)。 */
+const openCellInputs = new Set<HTMLInputElement>()
+
 /** 真表格 widget:点单元格把光标送进去(那一行进入活动态 → 自动显示源码)。 */
 class TableWidget extends WidgetType {
   constructor(
@@ -107,27 +110,33 @@ class TableWidget extends WidgetType {
       if (hit !== null && hit.closest('input, textarea') !== null) return
       event.preventDefault()
       const host = event.currentTarget as HTMLElement
-      // 按这一格的**内容盒**宽度给输入框定宽。用外框宽会溢出(外框含 td 的左右内边距),
-      // 列就被撑开 —— 实测 45px 的格设 37px 输入框后整列变 58px。
-      const style = getComputedStyle(host)
-      const inner =
-        host.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+      // 输入框**绝对定位铺满单元格**(样式见 theme 里的 .dsh-cm-table-input):
+      // 它对布局零影响 —— 不撑列、不撑行、不把下方内容顶走,也不会把文字裁掉。
+      // 单元格里原来那串文本**保留**(绝对定位元素不参与布局,列宽仍由文本决定),
+      // 输入框自己带底色盖在上面;取消编辑时只要移除输入框即可还原。
       const input = document.createElement('input')
       input.className = 'dsh-cm-table-input'
       input.size = 1
       input.value = cell.text
-      input.style.width = `${Math.max(24, Math.round(inner))}px`
+      // 提交只能发生一次:Esc 取消时我们会 `input.remove()` + `view.focus()`,而
+      // `view.focus()` 会让这个输入框 **blur**,blur 处理器再提交一次 —— 结果"取消"
+      // 反而把值写进了文档(实测)。用 done 标记把后续的 blur 挡掉。
+      let done = false
       const commit = (save: boolean): void => {
+        if (done) return
+        done = true
         const value = input.value
+        openCellInputs.delete(input)
         if (save && value !== cell.text) {
           // 有改动:dispatch 会让 StateField 重建 widget,DOM 自然还原
           view.dispatch({ changes: { from: cell.from, to: cell.to, insert: value } })
         } else {
-          // 没改动(或取消):**手动把 input 换回文本**。不然连点几个单元格
-          // 就会留下一排输入框(不 dispatch 就不会重建)—— 这是实测踩到的。
-          host.replaceChildren(document.createTextNode(cell.text))
+          // 没改动(或取消):把输入框摘掉即可,底下的文本一直在
+          input.remove()
         }
-        view.focus()
+        // 只有"没有别的单元格还在编辑"时才把焦点还给编辑器 —— 否则从 A 格直接点到
+        // B 格时,A 的 blur 会把焦点抢回 CM6,刚打开的 B 输入框就失焦了(实测踩到)。
+        if (openCellInputs.size === 0) view.focus()
       }
       input.addEventListener('keydown', (keyEvent) => {
         keyEvent.stopPropagation()
@@ -140,7 +149,8 @@ class TableWidget extends WidgetType {
         }
       })
       input.addEventListener('blur', () => commit(true))
-      host.replaceChildren(input)
+      host.appendChild(input)
+      openCellInputs.add(input)
       input.focus()
       // 不全选(用户反馈"蓝色选中是什么鬼"):光标落末尾
       input.setSelectionRange(input.value.length, input.value.length)
