@@ -4,13 +4,21 @@
  * 不引任何图标库:插件自带,不 `require` 宿主 UI 包(见 AGENTS.md 硬规则),
  * 也避免 emoji —— emoji 在文件树里既花又跟主题无关。
  * 尺寸/描边统一:viewBox 16、stroke-width 1.5、round cap/join、`shape-rendering` 默认。
+ *
+ * **尺寸跟着笔记区的缩放系数走**:`size` 是"设计尺寸"(系数 100% 时多少 px),
+ * 实际边长由 `cssSize()` 换算(见 src/client/scale.ts:本区系数 + 宿主全局字号增量)。
+ * 那两个变量只存在于笔记区内部,所以渲染在**侧栏 tab 条**上那枚 chip 图标
+ * (`sidebar.right.pane.tab.title` 座位,在 `.dsh-notes-root` 之外)自动不受影响 ——
+ * tab 条属于宿主,不该被笔记区的偏好改掉。
  */
 
 import React from 'react'
 
+import { cssSize } from './scale'
+
 /** 图标公共 props。 */
 export interface IconProps {
-  /** 边长(px),默认 14。 */
+  /** 设计边长(px),默认 14;实际显示 = 该值 × `--dsh-notes-scale`。 */
   size?: number
   /** 附加 class。 */
   className?: string
@@ -18,6 +26,8 @@ export interface IconProps {
 
 /** 统一的 svg 外壳。 */
 function Svg({ size = 14, className, children }: IconProps & { children: React.ReactNode }): React.ReactElement {
+  // CSS 覆盖属性:CSS 生效时按变量缩放,变量不存在(如 tab 条上的 chip)时回落设计值。
+  const scaled = cssSize(size)
   return (
     <svg
       width={size}
@@ -31,7 +41,7 @@ function Svg({ size = 14, className, children }: IconProps & { children: React.R
       className={className}
       aria-hidden="true"
       focusable="false"
-      style={{ flex: '0 0 auto', display: 'block' }}
+      style={{ flex: '0 0 auto', display: 'block', width: scaled, height: scaled }}
     >
       {children}
     </svg>
@@ -70,6 +80,9 @@ export function IconInbox(props: IconProps): React.ReactElement {
 
 /** 展开箭头(▸),用 rotate 表示展开态。 */
 export function IconChevron({ size = 12, className, open = false }: IconProps & { open?: boolean }): React.ReactElement {
+  // 这个图标自己画 svg(要挂 rotate/transition),所以缩放得跟着一起来 ——
+  // 少了 width/height 就会是"别的图标都变大、只有折叠箭头不变"(实测踩到)
+  const scaled = cssSize(size)
   return (
     <svg
       width={size}
@@ -83,7 +96,14 @@ export function IconChevron({ size = 12, className, open = false }: IconProps & 
       className={className}
       aria-hidden="true"
       focusable="false"
-      style={{ flex: '0 0 auto', display: 'block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }}
+      style={{
+        flex: '0 0 auto',
+        display: 'block',
+        width: scaled,
+        height: scaled,
+        transform: open ? 'rotate(90deg)' : 'none',
+        transition: 'transform .12s ease',
+      }}
     >
       <path d="M6 3.5 10.5 8 6 12.5" />
     </svg>

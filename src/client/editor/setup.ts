@@ -63,6 +63,8 @@ import {
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import { tags as tag } from '@lezer/highlight'
 
+import { cssSize } from '../scale'
+
 import { moveSection as moveSectionText } from '../../../lib/section.js'
 import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
 import { decorateFromTree } from './decorate'
@@ -650,7 +652,9 @@ function livePreview(
 const theme = EditorView.theme({
   '&': {
     height: '100%',
-    fontSize: '13.5px',
+    // 正文基准字号 = 设计值 × 笔记区系数 + 宿主的全局字号增量(见 styles.ts 顶部
+    // 「字号与缩放」)。下面所有字号都是 em,所以这里一处就能带动整篇文档。
+    fontSize: 'calc(13.5px * var(--dsh-notes-scale, 1) + var(--dsh-content-font-delta, 0px))',
     color: 'var(--dsw-alias-label-primary)',
     backgroundColor: 'transparent',
   },
@@ -712,7 +716,9 @@ const theme = EditorView.theme({
     boxShadow: '0 6px 20px rgba(0,0,0,.22)',
     overflow: 'hidden',
     fontFamily: 'inherit',
-    fontSize: '12px',
+    // 弹层/控件里的字号都是设计值:外面套一层编辑器主题的基准字号,
+    // 用 cssSize() 让它们跟着笔记区的缩放系数与全局字号增量走(写死 px 会孤立地小一号)
+    fontSize: cssSize(12),
   },
   '.cm-tooltip-autocomplete ul': { maxHeight: '220px' },
   '.cm-tooltip-autocomplete ul li': { padding: '4px 10px', color: 'var(--dsw-alias-label-primary)' },
@@ -720,7 +726,7 @@ const theme = EditorView.theme({
     background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent)',
     color: 'var(--dsw-alias-label-primary)',
   },
-  '.cm-tooltip-autocomplete .cm-completionLabel': { fontSize: '12px' },
+  '.cm-tooltip-autocomplete .cm-completionLabel': { fontSize: cssSize(12) },
   '.dsh-cm-wiki': {
     color: 'var(--dsw-alias-brand-primary)',
     borderBottom: '1px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 45%, transparent)',
@@ -793,7 +799,7 @@ const theme = EditorView.theme({
   },
   '.dsh-cm-code-lang-label': {
     flex: '1 1 auto',
-    fontSize: '11px',
+    fontSize: cssSize(11),
     letterSpacing: '.04em',
     textTransform: 'uppercase',
     color: 'var(--dsw-alias-label-secondary)',
@@ -804,7 +810,7 @@ const theme = EditorView.theme({
     background: 'transparent',
     color: 'var(--dsw-alias-label-secondary)',
     font: 'inherit',
-    fontSize: '11px',
+    fontSize: cssSize(11),
     padding: '1px 8px',
     borderRadius: '5px',
     cursor: 'pointer',
@@ -844,7 +850,7 @@ const theme = EditorView.theme({
     gap: '4px',
     margin: '2px 0 4px',
     padding: '1px 8px',
-    fontSize: '11px',
+    fontSize: cssSize(11),
     lineHeight: '1.7',
     color: 'var(--dsw-alias-label-secondary)',
     background: 'var(--dsw-alias-bg-layer-2)',
@@ -883,7 +889,7 @@ const theme = EditorView.theme({
     background: 'transparent',
     color: 'inherit',
     font: 'inherit',
-    fontSize: '11px',
+    fontSize: cssSize(11),
     letterSpacing: '.04em',
     textTransform: 'uppercase',
   },
@@ -946,7 +952,7 @@ const theme = EditorView.theme({
   '.dsh-cm-task': { verticalAlign: 'middle', marginRight: '6px', accentColor: 'var(--dsw-alias-brand-primary)' },
   '.dsh-cm-image': { display: 'inline-flex', flexDirection: 'column', gap: '2px', verticalAlign: 'middle' },
   '.dsh-cm-image img': { maxWidth: '100%', maxHeight: '320px', borderRadius: '6px', display: 'block' },
-  '.dsh-cm-image-caption': { fontSize: '11px', color: 'var(--dsw-alias-label-secondary)' },
+  '.dsh-cm-image-caption': { fontSize: cssSize(11), color: 'var(--dsw-alias-label-secondary)' },
 })
 
 /** 语法着色(代码块/行内 token)。 */

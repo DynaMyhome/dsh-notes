@@ -10,6 +10,8 @@
 
 import React, { useState } from 'react'
 
+import { cssSize } from './scale'
+
 /** 一条标题。 */
 export interface OutlineItem {
   level: number
@@ -73,7 +75,7 @@ export function OutlinePane({ t, items, activeLine, onJump, onMove }: OutlinePan
               draggingLine === item.line ? ' dsh-notes-outline-dragging' : ''
             }`}
             style={{
-              paddingLeft: `${8 + (item.level - 1) * 11}px`,
+              paddingLeft: cssSize(8 + (item.level - 1) * 11),
               ...(active && drop?.mode === 'before' ? { boxShadow: 'inset 0 2px 0 0 var(--dsw-alias-brand-primary)' } : {}),
               ...(active && drop?.mode === 'after' ? { boxShadow: 'inset 0 -2px 0 0 var(--dsw-alias-brand-primary)' } : {}),
             }}

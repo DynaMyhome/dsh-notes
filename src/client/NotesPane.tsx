@@ -60,6 +60,8 @@ import {
 } from './icons'
 import { OutlinePane, type OutlineItem } from './OutlinePane'
 import { QuickOpen } from './QuickOpen'
+import { ScaleControl } from './ScaleControl'
+import { readScale, scaleVars, writeScale } from './scale'
 import { CandidatesPanel } from './CandidatesPanel'
 import { TrashPane } from './TrashPane'
 import { TreePane } from './TreePane'
@@ -77,6 +79,14 @@ export interface NotesPaneProps {
   t: (key: string) => string
   /** 当前会话(决定工作区;右栏 tab 是 session 作用域)。 */
   sessionId?: string
+  /**
+   * 座位注入的 tab 信息钩子(`sidebar.right.pane.tab` 的 `hooks.tabInfo`)。
+   *
+   * 只读 `tab.visible` —— "这个正文此刻真的在显示吗"。tab 类型声明了
+   * `keepMounted: true`(见 main.tsx):切到别的 tab 只是**隐藏**,组件不卸载,
+   * 所以隐藏期间的后台活儿(4s 轮询)必须自己按这个标志停下。
+   */
+  useTabInfo?: () => { tab?: { visible?: boolean } }
 }
 
 /** 新建输入条的两种模式。 */
@@ -89,6 +99,14 @@ type ComposeMode = 'note' | 'collection'
 export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const t = props.t
   const sessionId = props.sessionId ?? ''
+  /**
+   * 本正文此刻是否真的在显示。
+   *
+   * **必须无条件调用**(和 `NotesChipTitle` 里那次一样):它内部是框架的订阅钩子,
+   * 条件调用会打破 Hooks 的调用顺序。座位没注入时用常量兜底(单测/旧宿主)。
+   */
+  const readTabInfo = props.useTabInfo ?? ((): { tab?: { visible?: boolean } } => ({ tab: { visible: true } }))
+  const visible = readTabInfo().tab?.visible ?? true
   const [treeOpen, setTreeOpen] = useState(true)
   const [treeWidth, setTreeWidth] = useState(TREE_DEFAULT)
   const [tree, setTree] = useState<Tree | null>(null)
@@ -127,14 +145,31 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
    */
   const [layoutReady, setLayoutReady] = useState(false)
   const [activePane, setActivePane] = useState<'p1' | 'p2'>('p1')
+  /**
+   * 工作区解析完了没有。
+   *
+   * 挂载后**先** `loadWorkspaces()`,再取树:`fetchTree` 带的是**模块级**
+   * `activeWorkspaceKey`(见 api.ts),刚挂载时它可能还是上一个会话/工作区留下的值 ——
+   * 抢跑一次不但白跑,还可能取到别的工作区的树。所以首次取树等这个闸门。
+   */
+  const [wsReady, setWsReady] = useState(false)
   /** 新建笔记后等树刷新再打开它(创建响应只有 id,没有 path/title)。 */
   const [pendingOpen, setPendingOpen] = useState<string | null>(null)
+  /** 笔记区的字号/图标微调系数(0.85–1.5;见 src/client/scale.ts)。 */
+  const [scale, setScale] = useState<number>(() => readScale())
+  /** 让**已挂载**的编辑器重量一次尺寸的信号:切回可见、或改了字号时 +1。 */
+  const [measureNonce, setMeasureNonce] = useState(0)
   const layoutKey = workspaceKey ?? 'session'
 
   /** 布局与聚焦栏的镜像(键盘手势在事件里读最新值,不进依赖)。
    *  注意:必须声明在 `layout`/`activePane` **之后**(useRef 的初值会立刻读它们)。 */
   const layoutRef = useRef(layout)
   const activePaneRef = useRef(activePane)
+  /**
+   * 可见性镜像:轮询 effect 的事件里读最新值,**不要**把 `visible` 写进依赖 ——
+   * 那会和 `refresh` 一样把定时器每次渲染重建(踩过的坑,见下面的 `refreshRef`)。
+   */
+  const visibleRef = useRef(visible)
 
   // 键盘手势读的是"最新值",用镜像而不是依赖(否则每渲染都要重挂监听)
   useEffect(() => {
@@ -446,9 +481,33 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     refreshRef.current = refresh
   }, [refresh])
 
-  // 挂载时先拉一次(只做一次,与 refresh 身份无关)
+  // 首次取树:等工作区解析完再拉(只做一次;见上面 `wsReady` 的注释)。
+  // 依赖 `sessionId` 是为了换会话后重新取一次树 —— 那时 `wsReady` 会被上面的
+  // loadWorkspaces effect 先置回 false,所以不会抢跑。
   useEffect(() => {
+    if (!wsReady) return
     void refreshRef.current()
+  }, [wsReady, sessionId])
+
+  /**
+   * 可见性变化:从"没在显示"变回"正在显示"时补一次对账 + 让编辑器重量尺寸。
+   *
+   * 轮询在隐藏期间是停的(见下面 effect),所以外部改动(Agent / Obsidian)不能等
+   * 下一个 4s 才出现;切回来立刻对一次账,并让隐藏期间量成 0 的 CodeMirror 重新量。
+   * 可见性由 `keepMounted`(main.tsx)带来:切 tab 不再卸载,改由这里接管时机。
+   */
+  useEffect(() => {
+    const previous = visibleRef.current
+    visibleRef.current = visible
+    if (previous === visible || !visible) return
+    void refreshRef.current()
+    setMeasureNonce((value) => value + 1)
+  }, [visible])
+
+  /** 改字号/图标大小:夹取 + 落盘 + 让编辑器重量尺寸(字变了行高也变)。 */
+  const applyScale = useCallback((next: number) => {
+    setScale(writeScale(next))
+    setMeasureNonce((value) => value + 1)
   }, [])
 
   // 回到这个窗口时对一次账(外部改名/删除不必等手动刷新)
@@ -490,10 +549,12 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
 
   // 轻量轮询:Host 侧的监视器(debounce 400ms)会把外部改动对完账并更新缓存,
   // 但服务端没有推送通道,所以这里只拉**便宜**的 tree(不触发扫描)来接住它。
-  // 页面不可见时停掉,不打扰。定时器**只挂一次**,不随渲染重建。
+  // 页面不可见、或**这个 tab 没在显示**时停掉,不打扰(tab 声明了 keepMounted,
+  // 隐藏后组件还活着,不门控的话会在后台一直轮询)。定时器**只挂一次**,不随渲染重建。
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return
+      if (!visibleRef.current) return
       void refreshRef.current()
     }, 4000)
     return () => window.clearInterval(timer)
@@ -727,8 +788,13 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   }, [sessionId])
 
   useEffect(() => {
-    // 解析完工作区(可能带上次选择)再放行布局,避免用 `session` 键建标签
-    void loadWorkspaces().finally(() => setLayoutReady(true))
+    // 解析完工作区(可能带上次选择)再放行布局,避免用 `session` 键建标签;
+    // 同时给「首次取树」开门 —— 换会话时先关上,免得拿上一个会话的工作区键抢跑。
+    setWsReady(false)
+    void loadWorkspaces().finally(() => {
+      setLayoutReady(true)
+      setWsReady(true)
+    })
   }, [loadWorkspaces])
 
   /** 打开一个绝对路径作为工作区(登记后切过去)。 */
@@ -1138,6 +1204,9 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     <div
       className="dsh-notes-root"
       ref={rootRef}
+      // 字号/图标缩放的**唯一**入口:整棵子树里的 `sc()` 与图标都读这个变量
+      // (见 src/client/scale.ts 与 styles.ts 顶部「字号与缩放」)
+      style={scaleVars(scale)}
       tabIndex={-1}
       onKeyDown={(event) => {
         // 只在焦点位于笔记区域内时接管:不劫持整个应用的 Ctrl+P(浏览器打印)
@@ -1205,6 +1274,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                   .replace('{c}', String(tree.stats.collections))}
         </span>
         <span className="dsh-notes-spacer" />
+        {/* 字号 / 图标大小(端头,树收起时也能用) */}
+        <ScaleControl t={t} scale={scale} onChange={applyScale} />
       </div>
       {wsMenu ? (
         <div className="dsh-notes-wsmenu" role="menu">
@@ -1437,6 +1508,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             onCursorLine={setCursorLine}
             jumpTo={jump}
             outlineMove={outlineMove}
+            measureNonce={measureNonce}
             onWikiLink={onWikiLink}
             getKnownTitles={knownTitles}
             activePane={activePane}

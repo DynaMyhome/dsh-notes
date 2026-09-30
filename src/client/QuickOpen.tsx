@@ -5,11 +5,14 @@
  * 生效(`.dsh-notes-root` 上的 onKeyDown),不劫持整个应用。
  *
  * 样式内联:这个组件只有一处用,放这里比塞进 styles.ts 更清楚。
+ * 字号走 `cssSize()`(和样式表同一个公式),这样它也跟着笔记区的缩放系数 /
+ * 全局字号增量变 —— 写死 px 的话 Aa 调大后这里是唯一不变的地方。
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { TreeNote } from './api'
+import { cssSize } from './scale'
 
 /** props。 */
 export interface QuickOpenProps {
@@ -102,8 +105,10 @@ export function QuickOpen({ notes, onPick, onClose }: QuickOpenProps): React.Rea
             border: 'none',
             outline: 'none',
             padding: '9px 12px',
-            fontSize: '13px',
+            // 顺序要紧:`font` 是简写,会把 font-size 一并重置回继承值 ——
+            // 所以必须写在 fontSize 之前,否则上面那行字号是死的(踩过)
             font: 'inherit',
+            fontSize: cssSize(13),
             color: 'var(--dsw-alias-label-primary)',
             background: 'transparent',
             borderBottom: '1px solid var(--dsw-alias-border-l1)',
@@ -111,7 +116,7 @@ export function QuickOpen({ notes, onPick, onClose }: QuickOpenProps): React.Rea
         />
         <div style={{ flex: '1 1 auto', minHeight: '0', overflow: 'auto', padding: '4px' }}>
           {matches.length === 0 ? (
-            <div style={{ padding: '10px', fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' }}>
+            <div style={{ padding: '10px', fontSize: cssSize(12), color: 'var(--dsw-alias-label-secondary)' }}>
               没有匹配的笔记
             </div>
           ) : (
@@ -137,7 +142,7 @@ export function QuickOpen({ notes, onPick, onClose }: QuickOpenProps): React.Rea
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
-                    fontSize: '12.5px',
+                    fontSize: cssSize(12.5),
                     color: 'var(--dsw-alias-label-primary)',
                   }}
                 >
@@ -150,7 +155,7 @@ export function QuickOpen({ notes, onPick, onClose }: QuickOpenProps): React.Rea
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
-                    fontSize: '10.5px',
+                    fontSize: cssSize(10.5),
                     color: 'var(--dsw-alias-label-secondary)',
                   }}
                 >

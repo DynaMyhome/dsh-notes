@@ -10,6 +10,7 @@ import React, { useEffect, useState } from 'react'
 
 import type { TrashEntry } from './api'
 import { IconTrash } from './icons'
+import { cssSize } from './scale'
 
 /** 面板 props。 */
 export interface TrashPaneProps {
@@ -101,7 +102,7 @@ export function TrashPane(props: TrashPaneProps): React.ReactElement {
                 <IconTrash size={13} />
                 <span className="dsh-notes-trash-name">
                   {entry.title}
-                  {entry.exists ? null : <span className="dsh-notes-trash-danger" style={{ marginLeft: 6, fontSize: 11 }}>{t('trash.missing')}</span>}
+                  {entry.exists ? null : <span className="dsh-notes-trash-danger" style={{ marginLeft: 6, fontSize: cssSize(11) }}>{t('trash.missing')}</span>}
                 </span>
                 <span className="dsh-notes-trash-meta">{stamp(entry.deletedAt)}</span>
                 <button type="button" className="dsh-notes-btn" disabled={!entry.exists} onClick={() => props.onRestore(entry)}>
