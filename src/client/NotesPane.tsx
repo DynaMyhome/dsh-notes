@@ -93,6 +93,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [treeWidth, setTreeWidth] = useState(TREE_DEFAULT)
   const [tree, setTree] = useState<Tree | null>(null)
   const [loading, setLoading] = useState(false)
+  /** 面板根节点(键盘手势判断焦点在不在我们这里)。 */
+  const rootRef = useRef<HTMLDivElement | null>(null)
   /** 树的镜像(给 refresh 判断"是不是首次加载",不参与渲染)。 */
   const treeRef = useRef<Tree | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -128,6 +130,20 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   /** 新建笔记后等树刷新再打开它(创建响应只有 id,没有 path/title)。 */
   const [pendingOpen, setPendingOpen] = useState<string | null>(null)
   const layoutKey = workspaceKey ?? 'session'
+
+  /** 布局与聚焦栏的镜像(键盘手势在事件里读最新值,不进依赖)。
+   *  注意:必须声明在 `layout`/`activePane` **之后**(useRef 的初值会立刻读它们)。 */
+  const layoutRef = useRef(layout)
+  const activePaneRef = useRef(activePane)
+
+  // 键盘手势读的是"最新值",用镜像而不是依赖(否则每渲染都要重挂监听)
+  useEffect(() => {
+    layoutRef.current = layout
+  }, [layout])
+  useEffect(() => {
+    activePaneRef.current = activePane
+  }, [activePane])
+
 
   const applyLayout = useCallback(
     (next: LayoutState) => {
@@ -423,6 +439,36 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [])
+
+  /**
+   * 键盘:聚焦在笔记面板里时 `Ctrl/Cmd+PageUp/PageDown` 在栏间循环;
+   * 加 `Shift` 则把**当前标签搬到另一栏**(Pane Relief 的标准手势,比自定义键更合肌肉记忆)。
+   */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.key !== 'PageUp' && event.key !== 'PageDown') return
+      const root = rootRef.current
+      if (root === null || root.contains(document.activeElement) === false) return
+      if (layoutRef.current.panes.length < 2) return
+      event.preventDefault()
+      const layout = layoutRef.current
+      const tab = layout.panes.find((pane) => pane.id === activePaneRef.current)?.tabs.find((item) => item.key === layout.panes.find((pane) => pane.id === activePaneRef.current)?.active)
+      if (event.shiftKey && tab !== undefined) {
+        const other = activePaneRef.current === 'p1' ? 'p2' : 'p1'
+        setLayoutState((current) => {
+          const next = moveTab(current, tab.key, { pane: other })
+          if (next === current) return current
+          saveLayout(layoutKey, next)
+          return next
+        })
+        setActivePane(other)
+        return
+      }
+      setActivePane((current) => (current === 'p1' ? 'p2' : 'p1'))
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [layoutKey])
 
   // 轻量轮询:Host 侧的监视器(debounce 400ms)会把外部改动对完账并更新缓存,
   // 但服务端没有推送通道,所以这里只拉**便宜**的 tree(不触发扫描)来接住它。
@@ -1073,6 +1119,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   return (
     <div
       className="dsh-notes-root"
+      ref={rootRef}
       tabIndex={-1}
       onKeyDown={(event) => {
         // 只在焦点位于笔记区域内时接管:不劫持整个应用的 Ctrl+P(浏览器打印)

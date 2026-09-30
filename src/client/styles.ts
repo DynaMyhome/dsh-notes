@@ -131,7 +131,9 @@ export const CSS = [
   '.dsh-notes-menu-key{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-label-secondary)}',
   '.dsh-notes-menu-arrow{flex:0 0 auto;color:var(--dsw-alias-label-secondary)}',
   '.dsh-notes-menu-sep{height:1px;margin:4px 6px;background:var(--dsw-alias-border-l1)}',
-  '.dsh-notes-submenu{position:absolute;left:calc(100% + 3px);top:-6px;z-index:81;min-width:186px;padding:5px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 6px 20px rgba(0,0,0,.22)}',
+  '.dsh-notes-submenu{position:absolute;left:100%;top:-6px;margin-left:4px;z-index:81;min-width:186px;padding:5px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 6px 20px rgba(0,0,0,.22)}',
+  // 悬停桥:父项与子菜单之间那 4px 也算子菜单的命中区,指针跨缝不会"掉落"
+  '.dsh-notes-submenu::before{content:"";position:absolute;left:-6px;top:0;bottom:0;width:6px}',
   '.dsh-notes-chip{display:inline-flex;align-items:center;gap:6px;min-width:0}',
   '.dsh-notes-chip>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.dsh-notes-ws{appearance:none;border:none;background:transparent;color:inherit;font:inherit;font-size:11px;padding:0 2px;margin-right:4px;cursor:pointer;border-radius:4px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',

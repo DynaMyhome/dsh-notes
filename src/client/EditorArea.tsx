@@ -86,7 +86,9 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
   const [outlines, setOutlines] = useState<Record<string, OutlineItem[]>>({})
   const [cursors, setCursors] = useState<Record<string, number>>({})
   /** 拖放指示:插到哪一栏的第几个位置(null = 没有拖动经过)。 */
-  const [dropHint, setDropHint] = useState<{ pane: 'p1' | 'p2'; index: number } | null>(null)
+  const [dropHint, setDropHint] = useState<{ pane: 'p1' | 'p2'; index: number; edge?: 'left' | 'right' | null } | null>(
+    null,
+  )
 
   const activeKey = useMemo(() => {
     const pane = layout.panes.find((item) => item.id === activePane) ?? layout.panes[0]
@@ -132,6 +134,8 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
       key={pane.id}
       className={`dsh-notes-pane${pane.id === activePane ? ' dsh-notes-pane-on' : ''}${
         dropHint?.pane === pane.id ? ' dsh-notes-pane-drop' : ''
+      }${dropHint?.pane === pane.id && dropHint.edge === 'left' ? ' dsh-notes-pane-drop-left' : ''}${
+        dropHint?.pane === pane.id && dropHint.edge === 'right' ? ' dsh-notes-pane-drop-right' : ''
       }`}
       aria-label={pane.id}
       onMouseDownCapture={() => props.onFocusPane(pane.id)}
@@ -140,16 +144,21 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
         if ((event.target as HTMLElement | null)?.closest?.('.dsh-notes-tabstrip') !== null) return
         event.preventDefault()
         event.dataTransfer.dropEffect = 'move'
-        setDropHint({ pane: pane.id, index: pane.tabs.length })
+        // 左右边缘带(各 18%)= 落到对应分栏(照 Obsidian 的"边缘 = 分屏/并入那一侧")
+        const box = event.currentTarget.getBoundingClientRect()
+        const ratio = box.width === 0 ? 0.5 : (event.clientX - box.left) / box.width
+        setDropHint({ pane: pane.id, index: pane.tabs.length, edge: ratio < 0.18 ? 'left' : ratio > 0.82 ? 'right' : null })
       }}
       onDragLeave={(event) => {
         if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
-        setDropHint(null)
+        setDropHint({ pane: pane.id, index: pane.tabs.length, edge: null })
       }}
       onDrop={(event) => {
         if ((event.target as HTMLElement | null)?.closest?.('.dsh-notes-tabstrip') !== null) return
         event.preventDefault()
-        props.onDropPayload(event.dataTransfer, pane.id, pane.tabs.length)
+        // 边缘带 → 落到 p1/p2(没有 p2 就现建一个,见 moveTab/openTab)
+        const landing = dropHint?.edge === 'left' ? 'p1' : dropHint?.edge === 'right' ? 'p2' : pane.id
+        props.onDropPayload(event.dataTransfer, landing, pane.tabs.length)
         setDropHint(null)
       }}
     >
@@ -173,7 +182,7 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
           props.onDropPayload(data, target, index)
           setDropHint(null)
         }}
-        onDropHint={setDropHint}
+        onDropHint={(hint) => setDropHint(hint === null ? null : { ...hint, edge: null })}
         dropIndex={dropHint?.pane === pane.id ? dropHint.index : null}
         onQuickOpen={() => props.onQuickOpen(pane.id)}
       />
