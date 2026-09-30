@@ -707,15 +707,17 @@ const theme = EditorView.theme({
     fontSize: '0.9em',
     lineHeight: '1.6',
   },
-  // 代码高亮的 token 颜色(全部走主题变量,深浅色自适应)
-  '.dsh-cm-code-body .tok-keyword': { color: 'var(--dsw-alias-brand-primary)' },
-  '.dsh-cm-code-body .tok-string': { color: 'var(--dsw-alias-label-success, #2f9e6e)' },
-  '.dsh-cm-code-body .tok-comment': { color: 'var(--dsw-alias-label-secondary)', fontStyle: 'italic' },
-  '.dsh-cm-code-body .tok-number, .dsh-cm-code-body .tok-type': { color: 'var(--dsw-alias-label-warning, #b7791f)' },
-  '.dsh-cm-code-body .tok-operator': { color: 'var(--dsw-alias-label-secondary)' },
-  '.dsh-cm-code-body .tok-atom, .dsh-cm-code-body .tok-constant': { color: 'var(--dsw-alias-brand-primary)' },
-  '.dsh-cm-code-body .tok-def, .dsh-cm-code-body .tok-function': { color: 'var(--dsw-alias-label-primary)' },
-  '.dsh-cm-code-body .tok-invalid': { color: 'var(--dsw-alias-label-danger, #d64545)' },
+  // 代码高亮的 token 颜色。
+  // 注意:这几个变量**必须是有定义的**(实测 --dsw-alias-label-success/warning/danger
+  // 在本主题里是空的,写了等于没写,颜色会回落到继承值);brand-primary 在亮色主题里
+  // 就是近黑色 #0f1115,所以关键字用 state-business-primary / onboarding-accent 这类真正的彩色 token。
+  '.dsh-cm-code-body .tok-keyword': { color: 'var(--dsw-alias-onboarding-accent)' },
+  '.dsh-cm-code-body .tok-string': { color: 'var(--dsw-alias-state-success-primary)' },
+  '.dsh-cm-code-body .tok-number, .dsh-cm-code-body .tok-type, .dsh-cm-code-body .tok-constant': { color: 'var(--dsw-alias-state-business-primary)' },
+  '.dsh-cm-code-body .tok-comment': { color: 'var(--dsw-alias-label-caption)', fontStyle: 'italic' },
+  '.dsh-cm-code-body .tok-operator, .dsh-cm-code-body .tok-def, .dsh-cm-code-body .tok-separator': { color: 'var(--dsw-alias-label-secondary)' },
+  '.dsh-cm-code-body .tok-atom': { color: 'var(--dsw-alias-onboarding-accent)' },
+  '.dsh-cm-code-body .tok-invalid': { color: 'var(--dsw-alias-state-error-primary)' },
   '.dsh-cm-math': { padding: '0 1px' },
   '.dsh-cm-math math': { fontSize: '1.02em' },
   // 表格单元格就地编辑的输入框
