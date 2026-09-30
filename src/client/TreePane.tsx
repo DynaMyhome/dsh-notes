@@ -527,11 +527,17 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                   if (row.drag === undefined) return
                   dragging = row.drag
                   event.dataTransfer.effectAllowed = 'copyMove'
-                  event.dataTransfer.setData('text/plain', row.key)
-                  // 笔记行额外带一个自定义类型:编辑区据此"拖进来就在那一栏打开"
+                  // 笔记行:三种载荷 —— 自定义 id(拖到标签栏 = 新开标签)、标题、以及
+                  // `[[标题]]` 作为纯文本(拖进正文时,即使走浏览器默认插入也是合法的 wiki 链接)。
                   if (row.kind === 'note' && row.key.startsWith('n:')) {
+                    const note = row.target as TreeNote | undefined
+                    const title = note?.title ?? ''
                     event.dataTransfer.setData('text/x-dsh-note-id', row.key.slice(2))
+                    event.dataTransfer.setData('text/x-dsh-note-title', title)
+                    event.dataTransfer.setData('text/plain', `[[${title}]]`)
+                    return
                   }
+                  event.dataTransfer.setData('text/plain', row.key)
                 }}
                 onDragEnd={endDrag}
                 onDragOver={(event) => {
