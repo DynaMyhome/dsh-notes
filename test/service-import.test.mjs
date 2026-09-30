@@ -52,6 +52,7 @@ async function setup() {
     assetsDir: '.dsh-assets',
     storeDir: join(root, 'store'),
     unfiledDepth: 3,
+    scanTtlMs: 8000,
     unfiledMax: 200,
     autosaveMs: 800,
     pasteImage: 'copy',
@@ -60,7 +61,7 @@ async function setup() {
   return { service, fs, root }
 }
 
-test('importFile: 外部 .md 导入成笔记(补 dsh-note-id、登记、标题取正文)', async () => {
+test('importFile: 外部 .md 导入成笔记(补 dsh-note-id、登记、标题取文件名)', async () => {
   const { service, fs, root } = await setup()
   try {
     const note = await service.importFile({
@@ -68,7 +69,8 @@ test('importFile: 外部 .md 导入成笔记(补 dsh-note-id、登记、标题�
       name: '外部笔记.md',
       text: '# 外部标题\n\n正文',
     })
-    assert.equal(note.title, '外部标题')
+    // 标题 = 文件名(H1 不再影响);正文原样保留
+    assert.equal(note.title, '外部笔记')
     assert.match(note.path, /notes\/外部笔记\.md$/)
     const written = fs.files.get(note.path)
     assert.match(written, /dsh-note-id: n_/)

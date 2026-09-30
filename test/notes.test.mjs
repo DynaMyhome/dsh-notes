@@ -87,10 +87,12 @@ test('parseWikiLinks: 目标 / 标题 / 别名', () => {
   )
 })
 
-test('titleOf: 优先第一个标题,否则文件名', () => {
-  assert.equal(titleOf('/a/b/x.md', '---\ntags: []\n---\n# 真标题\n正文'), '真标题')
-  assert.equal(titleOf('/a/b/我的笔记.md', '没有标题'), '我的笔记')
-  assert.equal(titleOf('/a/b/x.md', ''), 'x')
+test('titleOf: 标题就是文件名(H1 只是正文,不再影响标题)', () => {
+  assert.equal(titleOf('/a/b/x.md'), 'x')
+  assert.equal(titleOf('/a/b/我的笔记.md'), '我的笔记')
+  assert.equal(titleOf('/a/b/My Note.markdown'), 'My Note')
+  assert.equal(titleOf('/a/b/.md'), 'untitled')
+  assert.equal(titleOf('/a/b/x.md', '---\n---\n# 正文里的标题不该影响'), 'x')
 })
 
 test('sanitizeFileName: 非法字符与空标题', () => {

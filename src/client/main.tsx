@@ -51,6 +51,9 @@ const ZH: Record<string, string> = {
   'status.registered': '已纳入笔记树',
   'status.moved': '已移动',
   'status.rescanned': '已重新扫描',
+  // 重扫回显:告诉用户这次扫描到底改变了什么(以前按钮"看不出用处")
+  'status.rescanReport': '扫描完成:md {scanned} 个 · 重绑 {rebound} · 移除 {dropped} · 未纳入 {unfiled}',
+  'status.rescanTruncated': '(文件过多,已截断)',
   'status.noSession': '没有会话上下文,无法定位工作区',
   'editor.pending': '编辑器在 P2 接入(CodeMirror 6);现在这里显示选中笔记的路径。',
   'editor.noSelection': '在左侧选一篇笔记。',
@@ -153,6 +156,8 @@ const EN: Record<string, string> = {
   'status.registered': 'Added to the notes tree',
   'status.moved': 'Moved',
   'status.rescanned': 'Rescanned',
+  'status.rescanReport': 'Scan done: {scanned} md · rebound {rebound} · removed {dropped} · unfiled {unfiled}',
+  'status.rescanTruncated': '(truncated: too many files)',
   'status.noSession': 'No session context — cannot resolve a workspace',
   'tree.into': 'Into',
   'tree.before': 'Before',

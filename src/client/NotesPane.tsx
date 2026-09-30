@@ -129,11 +129,11 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const drag = useRef<{ startX: number; startWidth: number } | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
-  /** 拉一次树(force 会忽略 Host 侧扫描冷却)。 */
+  /** 拉一次树(force 会走一遍目录;平时都用非 force —— Host 侧只读缓存)。 */
   const refresh = useCallback(
-    async (force = false) => {
-      if (sessionId === '') return
-      setLoading(true)
+    async (force = false): Promise<Tree | null> => {
+      if (sessionId === '') return null
+      if (!force) setLoading(true)
       try {
         const next = await fetchTree(sessionId, force)
         setTree(next)
@@ -142,13 +142,30 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           if (current === null) return current
           return next.notes.find((note) => note.id === current.id) ?? null
         })
+        return next
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught))
+        return null
       } finally {
-        setLoading(false)
+        if (!force) setLoading(false)
       }
     },
     [sessionId],
+  )
+
+  /** 把扫描报告拼成一句人话 —— 「重新扫描」按钮到底干了什么,回显给用户。 */
+  const describeScan = useCallback(
+    (next: Tree | null): string => {
+      const report = next?.scanReport
+      if (report === null || report === undefined) return t('status.rescanned')
+      const text = t('status.rescanReport')
+        .replace('{scanned}', String(report.scanned))
+        .replace('{rebound}', String(report.rebound))
+        .replace('{dropped}', String(report.dropped))
+        .replace('{unfiled}', String(report.unfiled))
+      return report.truncated ? `${text} · ${t('status.rescanTruncated')}` : text
+    },
+    [t],
   )
 
   useEffect(() => {
@@ -160,6 +177,17 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     const onFocus = (): void => void refresh()
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
+  }, [refresh])
+
+  // 轻量轮询:Host 侧的监视器(debounce 400ms)会把外部改动对完账并更新缓存,
+  // 但服务端没有推送通道,所以这里只拉**便宜**的 tree(不触发扫描)来接住它。
+  // 页面不可见时停掉,不打扰。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void refresh()
+    }, 4000)
+    return () => window.clearInterval(timer)
   }, [refresh])
 
   useEffect(() => {
@@ -202,7 +230,9 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       try {
         const value = await call(action, { sessionId, ...payload })
         done?.(value)
-        await refresh(true)
+        // 非 force:Host 侧已就地修正过分类缓存(见 syncClassificationCache),
+        // 这里再走一遍目录纯属浪费(大工作区一次好几秒)。
+        await refresh()
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught))
       } finally {
@@ -511,7 +541,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         aria-label={t('action.rescan')}
         disabled={busy || loading}
         onClick={() => {
-          void refresh(true).then(() => setStatus(t('status.rescanned')))
+          void refresh(true).then((next) => setStatus(describeScan(next)))
         }}
       >
         ⟳
@@ -741,7 +771,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               aria-label={t('action.rescan')}
               disabled={busy || loading}
               onClick={() => {
-                void refresh(true).then(() => setStatus(t('status.rescanned')))
+                void refresh(true).then((next) => setStatus(describeScan(next)))
               }}
             >
               ⟳

@@ -94,16 +94,20 @@ test('refs / pins / recent', () => {
   assert.deepEqual(registry.workspaceOf('ws_a').recent, [note.id])
 })
 
-test('applyScan: 改名/移动按 id 重绑,漏扫的条目直接丢弃(不留 tombstone)', () => {
+test('applyScan: 改名/移动按 id 重绑,扫描范围内的漏扫条目才丢弃(不留 tombstone)', () => {
   const registry = seeded()
   const note = noteRecord({ path: '/ws_a/notes/x.md', workspaceKey: 'ws_a', title: 'X' })
   registry.addNote(note)
 
-  const result = registry.applyScan('ws_a', [
-    { id: note.id, path: '/ws_a/notes/sub/x-renamed.md', title: 'X' },
-    { id: 'n_other', path: '/ws_a/notes/new.md', title: 'New' },
-  ])
-  assert.deepEqual(result, { rebound: 1, registered: 0, dropped: 0 })
+  const result = registry.applyScan(
+    'ws_a',
+    [
+      { id: note.id, path: '/ws_a/notes/sub/x-renamed.md', title: 'X' },
+      { id: 'n_other', path: '/ws_a/notes/new.md', title: 'New' },
+    ],
+    { scopeRoot: '/ws_a/notes' },
+  )
+  assert.deepEqual(result, { rebound: 1, registered: 0, dropped: 0, outside: [] })
   assert.equal(registry.noteById(note.id).path, '/ws_a/notes/sub/x-renamed.md')
   // 带 id 但未登记的文件默认不自动纳入(避免污染)
   assert.equal(registry.noteByPath('/ws_a/notes/new.md'), undefined)
@@ -111,12 +115,26 @@ test('applyScan: 改名/移动按 id 重绑,漏扫的条目直接丢弃(不留 t
   const withUnknown = seeded()
   withUnknown.addNote(noteRecord({ path: '/ws_a/notes/x.md', workspaceKey: 'ws_a' }))
   assert.equal(
-    withUnknown.applyScan('ws_a', [{ id: 'n_other', path: '/ws_a/notes/new.md', title: 'New' }], { registerUnknown: true })
-      .registered,
+    withUnknown.applyScan('ws_a', [{ id: 'n_other', path: '/ws_a/notes/new.md', title: 'New' }], {
+      registerUnknown: true,
+      scopeRoot: '/ws_a/notes',
+    }).registered,
     1,
   )
-  // 文件消失 → 条目被丢弃
+  // 文件消失(在扫描范围内)→ 条目被丢弃
   assert.equal(withUnknown.noteByPath('/ws_a/notes/x.md') === undefined, true)
+})
+
+test('applyScan: **扫描范围之外**的已登记笔记不被"漏扫"判死(回归:登记工作区其它目录的 md)', () => {
+  const registry = seeded()
+  // 用户/Agent 显式登记了 notes/ 之外的文档 —— 扫描看不到它,但它还在盘上
+  const outside = noteRecord({ path: '/ws_a/docs/guide.md', workspaceKey: 'ws_a', title: 'guide' })
+  registry.addNote(outside)
+
+  const result = registry.applyScan('ws_a', [], { scopeRoot: '/ws_a/notes' })
+  assert.deepEqual(result, { rebound: 0, registered: 0, dropped: 0, outside: [outside.id] })
+  assert.equal(registry.noteById(outside.id) !== undefined, true)
+  assert.equal(registry.noteById(outside.id).path, '/ws_a/docs/guide.md')
 })
 
 test('applyScan: id 读不出来的扫描条目不会让已登记笔记被误删(回归)', () => {
@@ -124,8 +142,10 @@ test('applyScan: id 读不出来的扫描条目不会让已登记笔记被误删
   const note = noteRecord({ path: '/ws_a/notes/big.md', workspaceKey: 'ws_a', title: 'big' })
   registry.addNote(note)
   // 超大文件 / 读失败 → id 为 null,但它确实还躺在盘上
-  const result = registry.applyScan('ws_a', [{ id: null, path: '/ws_a/notes/big.md', title: 'big' }])
-  assert.deepEqual(result, { rebound: 0, registered: 0, dropped: 0 })
+  const result = registry.applyScan('ws_a', [{ id: null, path: '/ws_a/notes/big.md', title: 'big' }], {
+    scopeRoot: '/ws_a/notes',
+  })
+  assert.deepEqual(result, { rebound: 0, registered: 0, dropped: 0, outside: [] })
   assert.equal(registry.noteById(note.id) !== undefined, true)
 })
 
@@ -135,11 +155,15 @@ test('applyScan: 同一工作区里 repeat 扫描不误删仍在盘上的条目'
   const b = noteRecord({ path: '/ws_a/notes/b.md', workspaceKey: 'ws_a', title: 'b' })
   registry.addNote(a)
   registry.addNote(b)
-  const result = registry.applyScan('ws_a', [
-    { id: a.id, path: a.path, title: 'a' },
-    { id: b.id, path: b.path, title: 'b' },
-  ])
-  assert.deepEqual(result, { rebound: 0, registered: 0, dropped: 0 })
+  const result = registry.applyScan(
+    'ws_a',
+    [
+      { id: a.id, path: a.path, title: 'a' },
+      { id: b.id, path: b.path, title: 'b' },
+    ],
+    { scopeRoot: '/ws_a/notes' },
+  )
+  assert.deepEqual(result, { rebound: 0, registered: 0, dropped: 0, outside: [] })
   assert.equal(registry.noteById(a.id) !== undefined && registry.noteById(b.id) !== undefined, true)
 })
 
