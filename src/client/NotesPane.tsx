@@ -12,12 +12,17 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   call,
+  fetchFiles,
+  setScanRoots,
   fetchTrash,
   fetchTree,
+  ignorePaths,
   importNote,
+  includePaths,
   purgeTrash,
   restoreTrash,
   trashNote,
+  type FileScan,
   type TrashEntry,
   type Tree,
   type TreeNote,
@@ -27,6 +32,7 @@ import {
 import { EditorPane } from './EditorPane'
 import { OutlinePane, type OutlineItem } from './OutlinePane'
 import { QuickOpen } from './QuickOpen'
+import { CandidatesPanel } from './CandidatesPanel'
 import { TrashPane } from './TrashPane'
 import { TreePane } from './TreePane'
 
@@ -80,6 +86,11 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [quickOpen, setQuickOpen] = useState(false)
   /** 回收站面板与清单。 */
   const [trashOpen, setTrashOpen] = useState(false)
+  /** 纳入管理面板:三类分类的扫描结果(候选/杂项/统计)。 */
+  const [filesOpen, setFilesOpen] = useState(false)
+  const [filesScan, setFilesScan] = useState<FileScan | null>(null)
+  const [filesLoading, setFilesLoading] = useState(false)
+  const [filesError, setFilesError] = useState<string | null>(null)
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([])
   const [trashRoot, setTrashRoot] = useState('')
   const [trashLoading, setTrashLoading] = useState(false)
@@ -316,6 +327,127 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     [run, t],
   )
 
+  /** 读一次三类分类(打开面板 / 重扫 / 操作完之后)。 */
+  const loadFiles = useCallback(
+    async (force = false): Promise<void> => {
+      if (sessionId === '') return
+      setFilesLoading(true)
+      setFilesError(null)
+      try {
+        const result = await fetchFiles(sessionId, { force })
+        setFilesScan(result)
+      } catch (caught) {
+        setFilesError(caught instanceof Error ? caught.message : String(caught))
+      } finally {
+        setFilesLoading(false)
+      }
+    },
+    [sessionId],
+  )
+
+  // 分块续扫:Host 一趟走不完(done=false)会把队列前沿留着,这里持续拉直到走完。
+  // 每次调用最多走 walkBudgetMs(默认 4s),所以界面不会长时间没反应 —— 列表是长出来的。
+  useEffect(() => {
+    if (!filesOpen || filesScan?.scanning !== true) return undefined
+    const timer = window.setTimeout(() => void loadFiles(), 1200)
+    return () => window.clearTimeout(timer)
+  }, [filesOpen, filesScan, loadFiles])
+
+  /** 改扫描范围(默认只有 notesDir;要看别处得显式加,见 setScanRoots 注释)。 */
+  const onScanRoots = useCallback(
+    (roots: string[]) => {
+      if (sessionId === '') return
+      void (async () => {
+        try {
+          await setScanRoots(sessionId, roots)
+          await loadFiles(true)
+        } catch (caught) {
+          setFilesError(caught instanceof Error ? caught.message : String(caught))
+        }
+      })()
+    },
+    [loadFiles, sessionId],
+  )
+
+  /** 打开「纳入管理」面板(第一次打开走 TTL;过期的缓存 Host 侧会后台刷新)。 */
+  const onOpenCandidates = useCallback(() => {
+    setFilesOpen(true)
+    void loadFiles()
+  }, [loadFiles])
+
+  /** 纳入选中的 md → 重新读树(纳入后它们会出现在笔记树里)。 */
+  const onIncludeFiles = useCallback(
+    async (paths: string[]) => {
+      if (sessionId === '' || paths.length === 0) return
+      setBusy(true)
+      try {
+        const result = await includePaths(sessionId, paths)
+        await refresh()
+        await loadFiles(true)
+        setStatus(
+          result.failed.length === 0
+            ? t('status.included').replace('{n}', String(result.included.length))
+            : t('status.includedSome')
+                .replace('{n}', String(result.included.length))
+                .replace('{m}', String(result.failed.length)),
+        )
+      } catch (caught) {
+        setFilesError(caught instanceof Error ? caught.message : String(caught))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [loadFiles, refresh, sessionId, t],
+  )
+
+  /**
+   * 标记/放回「杂项」。带回**撤销**:忽略 → 撤销就是放回候选,反之亦然
+   * (误点忽略是用户明确提过的场景,一定要能一步退回来)。
+   */
+  const onIgnoreFiles = useCallback(
+    async (payload: { paths?: string[]; globs?: string[]; on?: boolean }) => {
+      if (sessionId === '') return
+      const on = payload.on !== false
+      setBusy(true)
+      try {
+        await ignorePaths(sessionId, payload)
+        await loadFiles(true)
+        const count = (payload.paths?.length ?? 0) + (payload.globs?.length ?? 0)
+        setStatus(on ? t('status.ignored').replace('{n}', String(count)) : t('status.unignored').replace('{n}', String(count)))
+      } catch (caught) {
+        setFilesError(caught instanceof Error ? caught.message : String(caught))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [loadFiles, sessionId, t],
+  )
+
+  /** 「移出并忽略」:移出笔记树 + 标为杂项(以后不再出现在候选里)。 */
+  const onUnregisterIgnore = useCallback(
+    (note: TreeNote) => {
+      setBusy(true)
+      void (async () => {
+        try {
+          await call('unregister', { sessionId, noteId: note.id })
+          await ignorePaths(sessionId, { paths: [note.relPath] })
+          if (selected?.id === note.id) {
+            setSelected(null)
+            setSelectedRef(null)
+          }
+          await refresh()
+          if (filesOpen) await loadFiles(true)
+          setStatus(t('status.unregisteredIgnored').replace('{p}', note.title))
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : String(caught))
+        } finally {
+          setBusy(false)
+        }
+      })()
+    },
+    [filesOpen, loadFiles, refresh, selected, sessionId, t],
+  )
+
   /** 读一次回收站清单。 */
   const refreshTrash = useCallback(async () => {
     setTrashLoading(true)
@@ -549,6 +681,18 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       <button
         type="button"
         className="dsh-notes-btn"
+        title={t('action.files')}
+        aria-label={t('action.files')}
+        onMouseDown={() => {
+          // 标签页里的按钮点击不该把编辑器/树的选择弄丢,所以用 mousedown 打开
+        }}
+        onClick={onOpenCandidates}
+      >
+        ⇥{filesScan !== null && filesScan.stats.candidates > 0 ? <span className="dsh-notes-count">{filesScan.stats.candidates}</span> : null}
+      </button>
+      <button
+        type="button"
+        className="dsh-notes-btn"
         title={t('action.trash')}
         aria-label={t('action.trash')}
         onClick={() => {
@@ -613,6 +757,19 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             setSelectedRef(null)
           }}
           onClose={() => setQuickOpen(false)}
+        />
+      ) : null}
+      {filesOpen ? (
+        <CandidatesPanel
+          t={t}
+          scan={filesScan}
+          loading={filesLoading}
+          error={filesError}
+          onClose={() => setFilesOpen(false)}
+          onRescan={() => void loadFiles(true)}
+          onInclude={(paths) => void onIncludeFiles(paths)}
+          onIgnore={(payload) => void onIgnoreFiles(payload)}
+          onScanRoots={onScanRoots}
         />
       ) : null}
       {trashOpen ? (
@@ -701,6 +858,9 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     onMoveCollection={onMoveCollection}
                     onPin={onPin}
                     onUnregister={onUnregister}
+                    onUnregisterIgnore={onUnregisterIgnore}
+                    onOpenCandidates={onOpenCandidates}
+                    scanCounts={filesScan === null ? null : { candidates: filesScan.stats.candidates, ignored: filesScan.stats.ignored }}
                     onTrash={onTrash}
                     onCopyPath={onCopyPath}
                     onReveal={onReveal}

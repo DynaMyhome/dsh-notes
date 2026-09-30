@@ -37,6 +37,12 @@ export interface TreePaneProps {
   /** 右键菜单动作。 */
   onPin: (note: TreeNote, pinned: boolean) => void
   onUnregister: (note: TreeNote) => void
+  /** 「移出并忽略」:移出笔记树 + 标为杂项(不再出现在候选里)。 */
+  onUnregisterIgnore?: (note: TreeNote) => void
+  /** 打开「纳入管理」面板(未纳入/杂项的统一入口)。 */
+  onOpenCandidates?: () => void
+  /** 最近一次「纳入管理」扫描的统计(有的话树里显示全工作区的候选/杂项数)。 */
+  scanCounts?: { candidates: number; ignored: number } | null
   onCopyPath: (path: string, relative: string) => void
   onReveal: (path: string) => void
   /** 在某个分类里新建笔记 / 子分类(`null` = 顶层)。 */
@@ -73,7 +79,7 @@ type DropMode = 'before' | 'after' | 'inside'
 /** 渲染层的一行。 */
 interface Row {
   key: string
-  kind: 'collection' | 'note' | 'ref' | 'unfiled'
+  kind: 'collection' | 'note' | 'ref' | 'unfiled' | 'inbox'
   depth: number
   label: string
   hint?: string
@@ -120,7 +126,7 @@ interface DropState {
  * @param props - 见 {@link TreePaneProps}。
  */
 export function TreePane(props: TreePaneProps): React.ReactElement {
-  const { t, tree, loading, error, selectedId } = props
+  const { t, tree, loading, error, selectedId, scanCounts } = props
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [drop, setDrop] = useState<DropState | null>(null)
   /** 右键菜单(位置 + 属于哪一行)。 */
@@ -211,42 +217,31 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
       })
     })
 
-    if (tree.unfiled.length > 0) {
-      const unfiledCount = tree.unfiled.length
+    // 未纳入:树里只留**一行摘要**,整理交给「纳入管理」面板
+    // (md 多的仓库里,内联列表既看不清也没法搜索/多选)。计数来自 notesDir 那一遍扫描,
+    // 面板打开后会显示整个工作区的完整三类统计。
+    {
+      // 这一行**常驻**:它是「纳入管理」的入口(候选/杂项全在面板里)。
+      // 还没扫过整个工作区时(scanCounts === null)退化成 notesDir 那一遍的计数。
+      const count = scanCounts === null ? tree.unfiled.length : scanCounts.candidates
+      const ignored = scanCounts?.ignored ?? 0
       out.push({
         key: 'unfiled',
-        kind: 'collection',
+        kind: 'inbox',
         depth: 0,
         label: t('tree.unfiled'),
         hint: t('tree.unfiledHint'),
-        count: unfiledCount,
-        hasChildren: true,
-        collapsed: collapsed.has('__unfiled'),
-        dropAs: '__unfiled',
+        count,
+        badge: ignored > 0 ? t('tree.ignoredBadge').replace('{n}', String(ignored)) : undefined,
+        hasChildren: false,
         parentId: null,
         index: childrenOf.get(null)?.length ?? 0,
-        childCount: unfiledCount,
+        childCount: 0,
         path: t('tree.unfiled'),
       })
-      if (!collapsed.has('__unfiled')) {
-        tree.unfiled.forEach((file, order) => {
-          out.push({
-            key: `u:${file.path}`,
-            kind: 'unfiled',
-            depth: 1,
-            label: file.title,
-            hint: file.relPath,
-            badge: tree.unfiledTruncated ? '…' : undefined,
-            parentId: '__unfiled',
-            index: order,
-            path: `${t('tree.unfiled')} / ${file.title}`,
-            target: file,
-          })
-        })
-      }
     }
     return out
-  }, [tree, collapsed, selectedId, t])
+  }, [tree, collapsed, selectedId, t, scanCounts])
 
   /** 顶层子项数(拖到空白处 = 追加到顶层末尾)。笔记与分类各自成序,要分开算。 */
   const rootCollections = rows.filter((row) => row.kind === 'collection' && (row.parentId ?? null) === null && row.dropAs !== '__unfiled').length
@@ -569,6 +564,7 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                   else if (row.kind === 'note' && row.target !== undefined) props.onSelectNote(row.target as TreeNote)
                   else if (row.kind === 'ref' && row.target !== undefined) props.onSelectRef(row.target as TreeRef)
                   else if (row.kind === 'unfiled' && row.target !== undefined) props.onFileAction(row.target as TreeUnfiled)
+                  else if (row.kind === 'inbox') props.onOpenCandidates?.()
                 }}
               >
                 {row.kind === 'collection' ? (
@@ -581,7 +577,7 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                 <span className="dsh-notes-glyph" aria-hidden="true">
                   {row.kind === 'collection' ? (
                     <IconCollection size={13} />
-                  ) : row.kind === 'unfiled' ? (
+                  ) : row.kind === 'unfiled' || row.kind === 'inbox' ? (
                     <IconInbox size={13} />
                   ) : (
                     <IconNote size={13} />
@@ -681,6 +677,7 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                   {item(t('menu.newNoteHere'), () => props.onNewNote(menu.row.parentId ?? null))}
                   <div className="dsh-notes-menu-sep" />
                   {item(t('menu.unregister'), () => props.onUnregister(note))}
+                  {item(t('menu.unregisterIgnore'), () => props.onUnregisterIgnore?.(note))}
                   {item(t('menu.trash'), () => props.onTrash?.(note))}
                 </>
               )
