@@ -568,18 +568,27 @@ export function insertImageSnippet(view: EditorView): void {
 }
 
 /** 装饰插件。 */
-function livePreview(documentPath: string | null, getKnownTitles?: () => Set<string>): Extension {
+function livePreview(
+  documentPath: string | null,
+  getKnownTitles?: () => Set<string>,
+  /**
+   * **必须显式传**:早先这里漏了形参,调用方给的第三个实参被丢掉,于是回落到模块级
+   * 单例 —— 只要有一栏被切成源码(单例变 true),**所有**栏的行内装饰就全没了
+   * (frontmatter chip 走的是按编辑器传入的 StateField,所以还在,现象很有迷惑性)。
+   */
+  sourceMode: boolean = isSourceMode(),
+): Extension {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet
 
       constructor(view: EditorView) {
-        this.decorations = safeBuild(view, documentPath, getKnownTitles)
+        this.decorations = safeBuild(view, documentPath, getKnownTitles, sourceMode)
       }
 
       update(update: ViewUpdate): void {
         if (update.docChanged || update.selectionSet || update.viewportChanged) {
-          this.decorations = safeBuild(update.view, documentPath, getKnownTitles)
+          this.decorations = safeBuild(update.view, documentPath, getKnownTitles, sourceMode)
         }
       }
     },
