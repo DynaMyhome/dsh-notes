@@ -211,8 +211,13 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
         const current = layoutRef.current.panes.find((item) => item.id === targetPane)
         const open = current?.tabs.find((item) => item.key === current.active)
         if (open !== undefined && open.noteId !== note.id) {
-          const stack = tabHistory.current[open.key] ?? []
-          tabHistory.current[open.key] = [...stack, open.noteId]
+          // **注意 key 里含 noteId**:reuse 之后这个标签的 key 会变,所以历史要记到
+          // **新的 key** 上(并把旧 key 的栈带过来),否则撤销时按新 key 查是空的 ——
+          // 这正是"点回退没反应"的原因。
+          const nextKey = `${layoutKey}:${note.id}`
+          const stack = [...(tabHistory.current[open.key] ?? []), open.noteId]
+          tabHistory.current[nextKey] = stack
+          if (open.key !== nextKey) delete tabHistory.current[open.key]
         }
       }
       setLayoutState((current) => {
@@ -1440,7 +1445,12 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               // 这个标签有跳转历史 → 回到上一个笔记(新打开的还没编辑过,这是"撤销"的直觉)
               const key = activeTab?.key
               if (key === undefined) return false
-              const stack = tabHistory.current[key] ?? []
+              let stack = tabHistory.current[key] ?? []
+              if (stack.length === 0) {
+                // 兜底:如果这个标签的 key 刚被换过,取"最近压过栈"的那一份
+                const fallback = Object.values(tabHistory.current).find((item) => item.length > 0)
+                stack = fallback ?? []
+              }
               const previous = stack[stack.length - 1]
               if (previous === undefined) return false
               const note = tree?.notes.find((item) => item.id === previous)

@@ -865,20 +865,11 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
             }
           }}
           onDrop={(event) => {
-            const id = event.dataTransfer.getData('text/x-dsh-note-id')
-            if (id === '') return
-            const editor = editorRef.current
-            if (editor === null) return
-            event.preventDefault()
+            if (event.dataTransfer.getData('text/x-dsh-note-id') === '') return
+            // **不自己插入**:CM6 自带的 drop 处理已经会用 text/plain(= `[[标题]]`)
+            // 在落点插入一次;我们之前又手动插了一次 → 变成两份(用户实测"重复了")。
+            // 这里只要阻止事件继续冒泡,免得 pane 层再开一个标签。
             event.stopPropagation()
-            const title =
-              event.dataTransfer.getData('text/x-dsh-note-title') ||
-              event.dataTransfer.getData('text/plain').replace(/^\[\[|\]\]$/g, '')
-            const pos =
-              editor.view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? editor.view.state.selection.main.from
-            const snippet = `[[${title}]]`
-            editor.view.dispatch({ changes: { from: pos, insert: snippet }, selection: { anchor: pos + snippet.length } })
-            editor.view.focus()
           }}
           onContextMenu={(event) => {
             const editor = editorRef.current
