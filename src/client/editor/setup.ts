@@ -559,6 +559,17 @@ export function insertFence(view: EditorView): boolean {
   if (range.head !== line.to) return false
   const match = /^(\s*)(`{3,}|~{3,})(\S*)\s*$/.exec(line.text)
   if (match === null) return false
+  // 只有"这一行就是围栏的**起始行**"才补收尾围栏。
+  // 在代码块内部(包括收尾围栏那一行)回车必须是**普通换行** —— 否则在收尾围栏末尾
+  // 回车会又补出一对围栏(用户实测:莫名其妙多了一个代码块)。
+  let node: ReturnType<typeof syntaxTree>['topNode'] | null = syntaxTree(state).resolveInner(range.head, -1)
+  while (node !== null) {
+    if (node.name === 'FencedCode' || node.name === 'CodeBlock') {
+      if (state.doc.lineAt(node.from).number !== line.number) return false
+      break
+    }
+    node = node.parent
+  }
   const indent = match[1] ?? ''
   const fence = match[2] ?? '```'
   view.dispatch({
