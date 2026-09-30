@@ -12,10 +12,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   call,
+  createNotesDir,
   fetchFiles,
   fetchWorkspaces,
   openWorkspace,
   setActiveWorkspace,
+  setNotesRoot,
   setScanRoots,
   type WorkspaceInfo,
   fetchTrash,
@@ -38,8 +40,9 @@ import { setSourceMode as applySourceMode } from './editor/mode'
 import {
   emptyLayout,
   loadLayout,
+  migrateLayout,
   openTab,
-  pruneTabs,
+  pruneTabsForWorkspace,
   saveLayout,
   tabKeyOf,
   type LayoutState,
@@ -89,6 +92,10 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [wsDraft, setWsDraft] = useState('')
   /** 每栏的源码/预览模式:分屏时左边预览、右边源码是常态,所以按栏存。 */
   const [sourceModeByPane, setSourceModeByPane] = useState<Record<'p1' | 'p2', boolean>>({ p1: false, p2: false })
+  /** 「这个工作区还没有笔记根」卡片:本会话内忽略(不写盘)。 */
+  const [missingDismissed, setMissingDismissed] = useState(false)
+  const [dirDraft, setDirDraft] = useState('')
+  const [dirBusy, setDirBusy] = useState(false)
 
   /**
    * 标签/分栏布局(按工作区持久化;切换工作区各用各的)。
@@ -98,6 +105,13 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
    * 真实布局由下面 `[layoutKey]` 的 effect 挂载后立即载入。
    */
   const [layout, setLayoutState] = useState<LayoutState>(emptyLayout)
+  /**
+   * 工作区列表解析完之前**不碰布局**。
+   *
+   * 挂载瞬间还不知道工作区键,标签会先落在 `session` 键下;若这时就按 `session` 建标签、
+   * 等键解析出来再按新键清理,标签会被整批误删(用户实测:"打开笔记几秒后自己关了")。
+   */
+  const [layoutReady, setLayoutReady] = useState(false)
   const [activePane, setActivePane] = useState<'p1' | 'p2'>('p1')
   /** 新建笔记后等树刷新再打开它(创建响应只有 id,没有 path/title)。 */
   const [pendingOpen, setPendingOpen] = useState<string | null>(null)
@@ -113,10 +127,11 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
 
   // 切换工作区 → 换一套布局(各自独立,互不干扰)
   useEffect(() => {
+    if (!layoutReady) return
     const loaded = typeof window === 'undefined' ? emptyLayout() : loadLayout(layoutKey)
     setLayoutState(loaded)
     setActivePane(loaded.activePane)
-  }, [layoutKey])
+  }, [layoutKey, layoutReady])
 
   /** 当前栏 + 当前标签(其余都是派生值,方便老代码继续用 `selected`)。 */
   const currentPane = layout.panes.find((item) => item.id === activePane) ?? layout.panes[0]
@@ -175,9 +190,21 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   )
 
   /** 树刷新后:把标签的标题/路径同步成新的,并把索引里没有的笔记摘掉。 */
+  /**
+   * 树刷新后同步标签:更新标题/路径,并清掉"确实已不在这个工作区"的标签。
+   *
+   * 三道守卫(缺一条就会出现"笔记自己关了"):① 布局还没就绪 → 不动;
+   * ② 拿到的树**属于别的工作区** → 不动;③ 只删"标签自己的工作区 === 当前工作区、
+   * 且该工作区笔记列表里没有它"的标签(`pruneTabsForWorkspace`,ref 标签永不因此被删)。
+   * 另外:内容没变就**原样返回**,避免每 4s 轮询都写一次 localStorage + 重渲染。
+   */
   const syncLayout = useCallback(
     (next: Tree) => {
       setLayoutState((current) => {
+        if (!layoutReady) return current
+        if (next.workspace?.key !== undefined && layoutKey !== 'session' && next.workspace.key !== layoutKey) {
+          return current
+        }
         const renamed = {
           ...current,
           panes: current.panes.map((pane) => ({
@@ -189,14 +216,17 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             }),
           })),
         }
-        const refKeys = new Set(renamed.panes.flatMap((pane) => pane.tabs.filter((tab) => tab.ref === true).map((tab) => tab.key)))
-        const alive = new Set(next.notes.map((note) => tabKeyOf(layoutKey, note.id)))
-        const pruned = pruneTabs(renamed, (key) => alive.has(key) || refKeys.has(key))
+        const pruned = pruneTabsForWorkspace(
+          renamed,
+          layoutKey,
+          next.notes.map((note) => note.id),
+        )
+        if (JSON.stringify(pruned) === JSON.stringify(current)) return current
         saveLayout(layoutKey, pruned)
         return pruned
       })
     },
-    [layoutKey],
+    [layoutKey, layoutReady],
   )
   const [compose, setCompose] = useState<ComposeMode | null>(null)
   /** 新建时的目标分类(右键「在此新建」/ 工具栏 ＋ 用)。 */
@@ -470,6 +500,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       setActiveWorkspace(key)
       setWorkspaceKey(key)
       setWsMenu(false)
+      setMissingDismissed(false)
+      setDirDraft('')
       // 不在这里清空调布局:每个工作区有自己的标签布局(layoutKey 变化时由 effect 载入),
       // 切回来时应该看到原来的标签,而不是被清空。
       setFilesScan(null)
@@ -486,6 +518,44 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     [refresh, sessionId],
   )
 
+  /** 创建缺失的笔记根(只创建这一个目录,永不删除/覆盖)。 */
+  const createMissingDir = useCallback(async () => {
+    if (sessionId === '') return
+    setDirBusy(true)
+    setError(null)
+    try {
+      const result = await createNotesDir(sessionId)
+      setStatus(t('status.notesDirCreated').replace('{p}', result.path))
+      setMissingDismissed(true)
+      await refresh(true)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setDirBusy(false)
+    }
+  }, [refresh, sessionId, t])
+
+  /** 把工作区里已有目录设为笔记根(必须是已存在的目录)。 */
+  const applyNotesRoot = useCallback(
+    async (path: string) => {
+      if (sessionId === '' || path.trim() === '') return
+      setDirBusy(true)
+      setError(null)
+      try {
+        const result = await setNotesRoot(sessionId, path.trim())
+        setStatus(t('status.notesRootSet').replace('{p}', result.notesRoot))
+        setMissingDismissed(true)
+        setDirDraft('')
+        await refresh(true)
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught))
+      } finally {
+        setDirBusy(false)
+      }
+    },
+    [refresh, sessionId, t],
+  )
+
   /** 载入已登记工作区列表(并恢复上次选择)。 */
   const loadWorkspaces = useCallback(async (): Promise<WorkspaceInfo[]> => {
     if (sessionId === '') return []
@@ -498,7 +568,11 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       } catch {
         saved = null
       }
-      if (saved !== null && result.workspaces.some((item) => item.key === saved)) {
+      // 没有(或失效的)上次选择 → 用**会话自己的工作区**,并且始终落到"真实键"上:
+      // 挂载瞬间标签会先存在 `session` 键下(那时还不知道工作区),这里把它迁过去。
+      if (saved === null || !result.workspaces.some((item) => item.key === saved)) saved = result.current
+      if (saved !== null) {
+        migrateLayout('session', saved)
         setActiveWorkspace(saved)
         setWorkspaceKey(saved)
       } else if (saved !== null) {
@@ -517,7 +591,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   }, [sessionId])
 
   useEffect(() => {
-    void loadWorkspaces()
+    // 解析完工作区(可能带上次选择)再放行布局,避免用 `session` 键建标签
+    void loadWorkspaces().finally(() => setLayoutReady(true))
   }, [loadWorkspaces])
 
   /** 打开一个绝对路径作为工作区(登记后切过去)。 */
@@ -1026,7 +1101,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               role="menuitem"
               className={`dsh-notes-wsmenu-item${item.key === workspaceKey || (workspaceKey === null && item.isSession) ? ' dsh-notes-wsmenu-on' : ''}`}
               title={item.root}
-              onClick={() => applyWorkspace(item.isSession && workspaceKey === null ? null : item.key)}
+              onClick={() => applyWorkspace(item.key)}
             >
               <span className="dsh-notes-wsmenu-name">{item.name}{item.isSession ? ` · ${t('ws.sessionTag')}` : ''}</span>
               <span className="dsh-notes-count">{item.notes}</span>
@@ -1043,7 +1118,11 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
               }}
             />
           </div>
-          <button type="button" className="dsh-notes-wsmenu-item" onClick={() => applyWorkspace(null)}>
+          <button
+            type="button"
+            className="dsh-notes-wsmenu-item"
+            onClick={() => applyWorkspace(workspaces.find((item) => item.isSession)?.key ?? null)}
+          >
             {t('ws.backToSession')}
           </button>
         </div>
@@ -1081,6 +1160,37 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     <span className="dsh-notes-count">{outline.length}</span>
                   ) : null}
                 </div>
+                {panelTab === 'files' && tree !== null && tree.notesDirMissing === true && !missingDismissed ? (
+                  // 这个工作区还没有笔记根:**不报错**,给张卡片说明 + 三个一键动作
+                  <div className="dsh-notes-missing">
+                    <div className="dsh-notes-missing-title">
+                      {t('notesdir.title').replace('{p}', tree.workspace.notesDir)}
+                    </div>
+                    <div className="dsh-notes-dim">
+                      {t('notesdir.hint').replace('{p}', tree.workspace.notesDir)}
+                    </div>
+                    <div className="dsh-notes-missing-actions">
+                      <button type="button" className="dsh-notes-btn" disabled={dirBusy} onClick={() => void createMissingDir()}>
+                        {t('notesdir.create').replace('{p}', tree.workspace.notesDir)}
+                      </button>
+                      <button type="button" className="dsh-notes-btn" disabled={dirBusy} onClick={() => void applyNotesRoot(dirDraft)}>
+                        {t('notesdir.apply')}
+                      </button>
+                      <button type="button" className="dsh-notes-btn" onClick={() => setMissingDismissed(true)}>
+                        {t('notesdir.later')}
+                      </button>
+                    </div>
+                    <input
+                      className="dsh-notes-input"
+                      placeholder={t('notesdir.useExisting')}
+                      value={dirDraft}
+                      onChange={(event) => setDirDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') void applyNotesRoot(dirDraft)
+                      }}
+                    />
+                  </div>
+                ) : null}
                 {panelTab === 'files' ? (
                   <TreePane
                     t={t}

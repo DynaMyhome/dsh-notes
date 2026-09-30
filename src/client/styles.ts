@@ -107,6 +107,10 @@ export const CSS = [
   '.dsh-notes-tab-close{appearance:none;border:none;background:transparent;color:inherit;font:inherit;font-size:12px;line-height:1;padding:0 2px;border-radius:3px;cursor:pointer;opacity:.55}',
   '.dsh-notes-tab-close:hover{opacity:1;background:var(--dsw-alias-bg-layer-1)}',
   /* 纳入管理面板(候选/杂项) */
+  '.dsh-notes-missing{flex:0 0 auto;display:flex;flex-direction:column;gap:6px;margin:6px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}',
+  '.dsh-notes-missing-title{font-size:12.5px;font-weight:600}',
+  '.dsh-notes-missing-actions{display:flex;align-items:center;gap:4px;flex-wrap:wrap}',
+  '.dsh-notes-missing .dsh-notes-input{font-size:11px}',
   '.dsh-notes-ws{appearance:none;border:none;background:transparent;color:inherit;font:inherit;font-size:11px;padding:0 2px;margin-right:4px;cursor:pointer;border-radius:4px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.dsh-notes-ws:hover{background:var(--dsw-alias-bg-layer-2)}',
   '.dsh-notes-wsmenu{position:absolute;z-index:60;top:29px;left:8px;min-width:260px;max-height:60%;overflow:auto;display:flex;flex-direction:column;padding:4px 0;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-overlay);box-shadow:0 12px 30px rgba(0,0,0,.28)}',

@@ -70,6 +70,8 @@ export interface Tree {
   recent: string[]
   /** 最近一次扫描的报告;**普通取树(读缓存)时为 null**。 */
   scanReport?: ScanReport | null
+  /** 这个工作区还没有笔记根目录(界面显示空态卡片,而不是报错)。 */
+  notesDirMissing?: boolean
   stats: { notes: number; collections: number; refs: number; unfiled: number }
 }
 
@@ -169,6 +171,8 @@ export interface WorkspaceInfo {
   notes: number
   lastUsedAt: number
   isSession: boolean
+  /** 这个工作区还没有笔记根目录。 */
+  notesDirMissing?: boolean
 }
 
 /** 列出已登记工作区 + 会话自己的工作区。 */
@@ -178,6 +182,28 @@ export async function fetchWorkspaces(
   const query = new URLSearchParams({ sessionId })
   const response = await fetch(`${PREFIX}/workspaces?${query.toString()}`, { credentials: 'same-origin' })
   return (await unwrap(response)) as { current: string | null; workspaces: WorkspaceInfo[] }
+}
+
+/**
+ * 改本工作区的笔记根(必须是工作区内**已存在**的目录)。
+ * @param path - 工作区相对或绝对路径。
+ */
+export async function setNotesRoot(
+  sessionId: string,
+  path: string,
+): Promise<{ workspaceKey: string; notesRoot: string }> {
+  return call('notes-root', { sessionId, path })
+}
+
+/**
+ * 创建工作区内的目录(默认就是当前笔记根)。只创建,永不删除或覆盖。
+ * @param path - 省略 = 当前笔记根。
+ */
+export async function createNotesDir(
+  sessionId: string,
+  path?: string,
+): Promise<{ workspaceKey: string; notesRoot: string; path: string; created: boolean }> {
+  return call('notes-dir', { sessionId, ...(path === undefined ? {} : { path }) })
 }
 
 /** 打开一个绝对路径作为笔记工作区(登记到索引,之后所有调用都用它)。 */
