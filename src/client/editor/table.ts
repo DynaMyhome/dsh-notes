@@ -107,14 +107,16 @@ class TableWidget extends WidgetType {
       if (hit !== null && hit.closest('input, textarea') !== null) return
       event.preventDefault()
       const host = event.currentTarget as HTMLElement
-      // 先量出这一格**当前**的宽度:输入框按它定宽,否则 input 的固有宽度
-      // (size 默认 20 字符)会把整列撑开(用户截图反馈:很难看)
-      const width = Math.round(host.getBoundingClientRect().width)
+      // 按这一格的**内容盒**宽度给输入框定宽。用外框宽会溢出(外框含 td 的左右内边距),
+      // 列就被撑开 —— 实测 45px 的格设 37px 输入框后整列变 58px。
+      const style = getComputedStyle(host)
+      const inner =
+        host.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
       const input = document.createElement('input')
       input.className = 'dsh-cm-table-input'
       input.size = 1
       input.value = cell.text
-      input.style.width = `${Math.max(28, width - 8)}px`
+      input.style.width = `${Math.max(24, Math.round(inner))}px`
       const commit = (save: boolean): void => {
         const value = input.value
         if (save && value !== cell.text) {
