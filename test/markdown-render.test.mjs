@@ -246,3 +246,24 @@ test('分隔线:预览时把 `---` 藏起来(只留那条线),光标落上去才
   const onLine = decide('正文\n\n---\n\n下一段\n', [{ from: from + 1, to: from + 1 }])
   assert.equal(only(onLine, HIDE).length, 0, '光标在分隔线上时不隐藏')
 })
+
+// TODO(未修完):表格紧跟的那一行拿不到行内装饰。这条用例**先跳过**,它是下一步的靶子:
+// 在 Node 里就能复现,不需要浏览器。当前 walk 的 Table 分支 return 掉子节点,而解析器的
+// Table 节点范围包含紧跟的那一行 —— 但补了"夹取后继续走子节点"仍未产出 wiki 装饰,
+// 说明该行的节点并非 Table 的子节点(或走了另一条分支),下轮据此继续定位。
+test('表格紧跟的那一行:行内链接必须照常装饰(解析器的 Table 节点吞了它)', { skip: true }, () => {
+  const text = '| 列一 | 列二 |\n| --- | --- |\n| 11 | 11 |\n[[编辑器验收]]\n端到端'
+  const tree = markdownLanguage.parser.parse(text)
+  const lines = lineIndex(text)
+  const wikiLine = lines.lineOf(text.indexOf('[[编辑器验收]]'))
+  const descriptions = decideDecorations({
+    tree,
+    text,
+    selection: [],
+    knownTitles: new Set(['编辑器验收']),
+    reveal: true,
+  })
+  const wiki = descriptions.filter((item) => item.kind === MARK && item.cls === 'wiki')
+  assert.equal(wiki.length, 1, '紧跟表格的那一行也要有一条 wiki 装饰')
+  assert.equal(lines.lineOf(wiki[0].from), wikiLine, '装饰要落在那一行上')
+})
