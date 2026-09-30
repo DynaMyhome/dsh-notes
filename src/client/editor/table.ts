@@ -142,7 +142,8 @@ class TableWidget extends WidgetType {
       input.addEventListener('blur', () => commit(true))
       host.replaceChildren(input)
       input.focus()
-      input.select()
+      // 不全选(用户反馈"蓝色选中是什么鬼"):光标落末尾
+      input.setSelectionRange(input.value.length, input.value.length)
     }
     if (this.model.header.length > 0) {
       const head = document.createElement('thead')
