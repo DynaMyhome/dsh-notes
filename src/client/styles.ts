@@ -131,7 +131,7 @@ export const CSS = [
   '.dsh-notes-menu-key{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-label-secondary)}',
   '.dsh-notes-menu-arrow{flex:0 0 auto;color:var(--dsw-alias-label-secondary)}',
   '.dsh-notes-menu-sep{height:1px;margin:4px 6px;background:var(--dsw-alias-border-l1)}',
-  '.dsh-notes-submenu{position:absolute;left:100%;top:-6px;margin-left:4px;z-index:81;min-width:186px;padding:5px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 6px 20px rgba(0,0,0,.22)}',
+  '.dsh-notes-submenu{position:absolute;left:100%;top:-6px;margin-left:4px;z-index:81;min-width:186px;max-height:min(70vh,420px);overflow:auto;padding:5px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 6px 20px rgba(0,0,0,.22)}',
   // 悬停桥:父项与子菜单之间那 4px 也算子菜单的命中区,指针跨缝不会"掉落"
   '.dsh-notes-submenu::before{content:"";position:absolute;left:-6px;top:0;bottom:0;width:6px}',
   '.dsh-notes-chip{display:inline-flex;align-items:center;gap:6px;min-width:0}',
