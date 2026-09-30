@@ -191,6 +191,8 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
                 jumpTo={props.jumpTo}
                 sourceMode={props.sourceModeByPane[pane.id] === true}
                 onToggleSourceMode={() => props.onToggleSourceMode(pane.id)}
+                // 分屏时只有聚焦栏的活动标签显示工具栏(工具作用于聚焦的那一份笔记)
+                showToolbar={pane.id === props.activePane && tab.key === pane.active}
               />
             )}
           </div>

@@ -92,6 +92,13 @@ export interface EditorPaneProps {
    */
   sourceMode?: boolean
   onToggleSourceMode?: () => void
+  /**
+   * 是否显示工具栏(默认 true)。
+   *
+   * 分屏时**只让聚焦栏显示**:两栏各一套工具既挤又容易点错目标;
+   * 条本身在两边都保留(等高),所以切换聚焦时高度不会跳。
+   */
+  showToolbar?: boolean
 }
 
 /** 保存状态。 */
@@ -391,7 +398,9 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
           {note.title}
         </span>
         <span className="dsh-notes-spacer" />
-        {/* 一行命令:放不下就横向滚动(见 styles.ts),分组用细分隔线 */}
+        {/* 一行命令:放不下就横向滚动(见 styles.ts),分组用细分隔线。
+            分屏时只有聚焦栏渲染它(见 showToolbar),另一栏留一条等高的空条。 */}
+        {props.showToolbar === false ? null : (
         <span className="dsh-notes-toolbar dsh-notes-editor-tools" role="toolbar">
           {/* 1 历史 */}
           <button type="button" className="dsh-notes-btn" title={t('editor.undo')} aria-label={t('editor.undo')} onClick={() => apply((e) => historyUndo(e.view))}>
@@ -525,6 +534,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
             <IconCheck />
           </button>
         </span>
+        )}
 
         {/* 标题级别 */}
         {popover === 'heading' ? (
