@@ -89,9 +89,9 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   )
   /** 行内改名的提交与取消。 */
   const commitNoteRename = (
-    (note: TreeNote, title: string): void => {
+    (noteId: string, title: string): void => {
       setRenamingKey(null)
-      void run('rename', { noteId: note.id, title })
+      void run('rename', { noteId, title })
     },
   )
   const commitCollectionRename = (

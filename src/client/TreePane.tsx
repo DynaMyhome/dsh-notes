@@ -50,7 +50,7 @@ export interface TreePaneProps {
   /** 正在行内改名的行 key(`n:<id>` / `c:<id>`)。 */
   renamingKey?: string | null
   /** 提交笔记改名(行内输入回车/失焦)。 */
-  onRenameNote?: (note: TreeNote, title: string) => void
+  onRenameNote?: (noteId: string, title: string) => void
   /** 提交分类改名。 */
   onRenameCollection?: (id: string, name: string) => void
   /** 取消行内改名。 */
@@ -603,7 +603,7 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                       return
                     }
                     if (row.kind === 'collection') props.onRenameCollection?.(row.id, value)
-                    else if (row.note !== undefined) props.onRenameNote?.(row.note, value)
+                    else if (row.note !== undefined) props.onRenameNote?.(row.id, value)
                   }}
                   onKeyDownCapture={(event) => {
                     if (event.key === 'Enter') {
