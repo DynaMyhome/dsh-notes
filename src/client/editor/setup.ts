@@ -547,6 +547,27 @@ function safeBuild(
 }
 
 /** 在当前选区插入图片片段,并**选中占位路径**便于直接替换。 */
+/**
+ * 在空行敲 ``` / ```lang 后回车:自动补上**收尾围栏**,光标停在中间 —— Typora/Obsidian 手感。
+ * @returns 是否消费了这次回车。
+ */
+export function insertFence(view: EditorView): boolean {
+  const state = view.state
+  const range = state.selection.main
+  if (!range.empty) return false
+  const line = state.doc.lineAt(range.head)
+  if (range.head !== line.to) return false
+  const match = /^(\s*)(`{3,}|~{3,})(\S*)\s*$/.exec(line.text)
+  if (match === null) return false
+  const indent = match[1] ?? ''
+  const fence = match[2] ?? '```'
+  view.dispatch({
+    changes: { from: line.to, insert: `\n\n${indent}${fence}` },
+    selection: { anchor: line.to + 1 },
+  })
+  return true
+}
+
 export function insertImageSnippet(view: EditorView): void {
   const range = view.state.selection.main
   const snippet = '![](图片路径)'
@@ -759,15 +780,16 @@ const theme = EditorView.theme({
   '.dsh-cm-table-input': {
     boxSizing: 'border-box',
     minWidth: '0',
-    border: '1px solid var(--dsw-alias-brand-primary)',
+    border: '1px solid var(--dsw-alias-border-l2)',
     borderRadius: '3px',
     padding: '0 3px',
     margin: '0',
     font: 'inherit',
     lineHeight: 'inherit',
-    background: 'var(--dsw-alias-bg-base)',
+    background: 'transparent',
     color: 'var(--dsw-alias-label-primary)',
     verticalAlign: 'baseline',
+    outline: 'none',
   },
   '.dsh-cm-table-delim': { color: 'var(--dsw-alias-label-secondary)', opacity: '.45' },
   '.dsh-cm-table-head': {
@@ -961,6 +983,8 @@ export function createEditor(options: {
         { key: 'Mod-s', preventDefault: true, run: () => (options.onSave(), true) },
         { key: 'Mod-f', preventDefault: true, run: openSearchPanel },
         // markdown 续写:Enter 续列表/引用、空项退出;Backspace 删标记(官方实现)
+        // 空行里的 ``` 回车 → 自动补收尾围栏(必须在 markdown 续行命令之前)
+        { key: 'Enter', run: insertFence },
         { key: 'Enter', run: insertNewlineContinueMarkup },
         { key: 'Shift-Enter', run: insertNewlineContinueMarkup },
         { key: 'Backspace', run: deleteMarkupBackward },
