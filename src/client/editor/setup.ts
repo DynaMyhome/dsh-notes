@@ -64,6 +64,7 @@ import { tags as tag } from '@lezer/highlight'
 import { moveSection as moveSectionText } from '../../../lib/section.js'
 import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
 import { decorateFromTree } from './decorate'
+import { planBlockInsert } from './blocks'
 import { resolveImageUrl } from './media'
 import { tableBlocks, tableTab } from './table'
 
@@ -1198,13 +1199,12 @@ export function toggleLinePrefix(view: EditorView, prefix: string): void {
  * @param caretFromStart - 插入后光标相对 `block` 起点的偏移。
  */
 function insertBlockAt(view: EditorView, block: string, caretFromStart: number): void {
-  const range = view.state.selection.main
-  const line = view.state.doc.lineAt(range.from)
-  const before = line.text.slice(0, range.from - line.from).trim().length > 0 ? '\n' : ''
-  const after = line.text.slice(range.to - line.from).trim().length > 0 ? '\n' : ''
+  // 规划部分在 editor/blocks.ts(纯函数,有单测):块级构造必须前后留空行,否则会被
+  // 并进上一段 —— 表格后面紧跟 `---` 会被解析成 SetextHeading2,整张表消失。
+  const plan = planBlockInsert(view.state.doc, view.state.selection.main, block, caretFromStart)
   view.dispatch({
-    changes: { from: range.from, to: range.to, insert: before + block + after },
-    selection: { anchor: range.from + before.length + caretFromStart },
+    changes: { from: plan.from, to: plan.to, insert: plan.insert },
+    selection: { anchor: plan.caret },
   })
   view.focus()
 }

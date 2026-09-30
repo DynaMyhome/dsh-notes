@@ -231,3 +231,18 @@ test('描述按位置有序(运行时用 RangeSet.of(..., sort) 也依赖这一�
   const positions = descs.map((item) => item.from)
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b))
 })
+
+test('分隔线:预览时把 `---` 藏起来(只留那条线),光标落上去才还原', () => {
+  // 用户实测:以前只加了行装饰(横线),`---` 原文还留在那里,看起来像"没渲染"。
+  const away = decide('正文\n\n---\n\n下一段\n')
+  const hidden = only(away, HIDE)
+  assert.equal(hidden.length, 1, '应有一条 HIDE 盖住 `---`')
+  assert.equal(hidden[0].from, '正文\n\n'.length)
+  assert.equal(hidden[0].to, '正文\n\n---'.length)
+  assert.equal(only(away, LINE).some((item) => item.cls === 'rule'), true, '行装饰(横线)仍在')
+
+  // 光标落在这条分隔线上 → 显示源码,不隐藏
+  const from = '正文\n\n'.length
+  const onLine = decide('正文\n\n---\n\n下一段\n', [{ from: from + 1, to: from + 1 }])
+  assert.equal(only(onLine, HIDE).length, 0, '光标在分隔线上时不隐藏')
+})
