@@ -36,6 +36,8 @@ export interface EditorAreaProps {
   jumpTo: { line: number; nonce: number } | null
   outlineMove: { fromLine: number; toLine: number; mode: 'before' | 'after'; nonce: number } | null
   onWikiLink: (title: string) => void
+  /** 撤销的前置钩子(有跳转历史时回到上一个笔记)。 */
+  onBack: () => boolean
   getKnownTitles: () => Set<string>
   activePane: 'p1' | 'p2'
   onFocusPane: (id: 'p1' | 'p2') => void
@@ -154,7 +156,8 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
         setDropHint({ pane: pane.id, index: pane.tabs.length, edge: null })
       }}
       onDrop={(event) => {
-        if ((event.target as HTMLElement | null)?.closest?.('.dsh-notes-tabstrip') !== null) return
+        const host = (event.target as HTMLElement | null)?.closest?.('.dsh-notes-tabstrip, .dsh-notes-editor-host')
+        if (host !== null && host !== undefined) return // 标签栏/正文自己处理
         event.preventDefault()
         // 边缘带 → 落到 p1/p2(没有 p2 就现建一个,见 moveTab/openTab)
         const landing = dropHint?.edge === 'left' ? 'p1' : dropHint?.edge === 'right' ? 'p2' : pane.id
@@ -208,6 +211,7 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
                 onOutline={outlineFor(tab.key)}
                 onCursorLine={cursorFor(tab.key)}
                 onWikiLink={props.onWikiLink}
+                onBack={props.onBack}
                 getKnownTitles={props.getKnownTitles}
                 outlineMove={props.outlineMove}
                 jumpTo={props.jumpTo}

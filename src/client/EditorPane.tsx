@@ -86,6 +86,11 @@ export interface EditorPaneProps {
   outlineMove?: { fromLine: number; toLine: number; mode: 'before' | 'after'; nonce: number } | null
   /** 点 `[[双链]]`(外壳决定打开还是新建)。 */
   onWikiLink?: (title: string) => void
+  /**
+   * 工具栏「撤销」的前置钩子:返回 true 表示这次撤销被外壳接管了
+   * (例如这个标签是点 `[[链接]]` 跳过来的,撤销应当回到上一个笔记)。
+   */
+  onBack?: () => boolean
   /** 当前工作区已知标题(双链上色用)。 */
   getKnownTitles?: () => Set<string>
   /**
@@ -571,7 +576,17 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
         {props.showToolbar === false ? null : (
         <span className="dsh-notes-toolbar dsh-notes-editor-tools" role="toolbar">
           {/* 1 历史 */}
-          <button type="button" className="dsh-notes-btn" title={t('editor.undo')} aria-label={t('editor.undo')} onClick={() => apply((e) => historyUndo(e.view))}>
+          <button
+            type="button"
+            className="dsh-notes-btn"
+            title={t('editor.undo')}
+            aria-label={t('editor.undo')}
+            onClick={() => {
+              // 没有编辑、但有"跳转历史"时,撤销 = 回到上一个笔记
+              if (props.onBack?.() === true) return
+              apply((e) => historyUndo(e.view))
+            }}
+          >
             <IconUndo />
           </button>
           <button type="button" className="dsh-notes-btn" title={t('editor.redo')} aria-label={t('editor.redo')} onClick={() => apply((e) => historyRedo(e.view))}>
@@ -841,6 +856,30 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
         <div
           className="dsh-notes-editor-host"
           ref={hostRef}
+          // 从左侧栏把笔记**拖进正文** = 在这里插入 `[[标题]]`(不是新开标签,
+          // 也不能塞原始 id);拖到标签栏才是新开标签。
+          onDragOver={(event) => {
+            if (event.dataTransfer.types.includes('text/x-dsh-note-id')) {
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'copy'
+            }
+          }}
+          onDrop={(event) => {
+            const id = event.dataTransfer.getData('text/x-dsh-note-id')
+            if (id === '') return
+            const editor = editorRef.current
+            if (editor === null) return
+            event.preventDefault()
+            event.stopPropagation()
+            const title =
+              event.dataTransfer.getData('text/x-dsh-note-title') ||
+              event.dataTransfer.getData('text/plain').replace(/^\[\[|\]\]$/g, '')
+            const pos =
+              editor.view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? editor.view.state.selection.main.from
+            const snippet = `[[${title}]]`
+            editor.view.dispatch({ changes: { from: pos, insert: snippet }, selection: { anchor: pos + snippet.length } })
+            editor.view.focus()
+          }}
           onContextMenu={(event) => {
             const editor = editorRef.current
             if (editor === null) return

@@ -1004,10 +1004,18 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
    * 点 `[[双链]]`:对得上就打开;**对不上什么都不创建**,只给一句提示
    * (用户明确要求:未命中不要自动新建笔记)。
    */
+  /** 每个标签的"跳转历史"(tabKey → 走过的 noteId):撤销用它回到上一个笔记。 */
+  const tabHistory = useRef<Record<string, string[]>>({})
+
   const onWikiLink = useCallback(
     (title: string) => {
       const existing = tree?.notes.find((note) => note.title === title)
       if (existing !== undefined) {
+        // 记住"从哪来":新笔记什么都没编辑,撤销就该回到那一篇
+        if (activeTab !== null && activeTab.noteId !== existing.id) {
+          const stack = tabHistory.current[activeTab.key] ?? []
+          tabHistory.current[activeTab.key] = [...stack, activeTab.noteId]
+        }
         setSelected(existing)
           return
       }
@@ -1423,6 +1431,22 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             getKnownTitles={knownTitles}
             activePane={activePane}
             onFocusPane={setActivePane}
+            onBack={() => {
+              // 这个标签有跳转历史 → 回到上一个笔记(新打开的还没编辑过,这是"撤销"的直觉)
+              const key = activeTab?.key
+              if (key === undefined) return false
+              const stack = tabHistory.current[key] ?? []
+              const previous = stack[stack.length - 1]
+              if (previous === undefined) return false
+              const note = tree?.notes.find((item) => item.id === previous)
+              if (note === undefined) {
+                tabHistory.current[key] = []
+                return false
+              }
+              tabHistory.current[key] = stack.slice(0, -1)
+              setSelected(note)
+              return true
+            }}
             relPathOf={relPathOf}
             onDropPayload={(data, target, index) => {
               const tabKey = data.getData('text/x-dsh-note-tab')
