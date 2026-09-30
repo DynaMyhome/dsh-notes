@@ -134,6 +134,46 @@ export async function pinNote(sessionId: string, noteId: string, pinned: boolean
   return call('pin', { sessionId, noteId, pinned })
 }
 
+/** 回收站里的一条记录。 */
+export interface TrashEntry {
+  id: string
+  noteId: string
+  title: string
+  originalPath: string
+  file: string
+  workspaceKey: string
+  deletedAt: number
+  /** 文件是否还在回收站目录里(可能被外部动过)。 */
+  exists: boolean
+}
+
+/** 删除笔记 → 移入回收站(文件没被真删,可恢复)。 */
+export async function trashNote(
+  sessionId: string,
+  noteId: string,
+): Promise<{ id: string; title: string; path: string; file: string }> {
+  return call('trash', { sessionId, noteId })
+}
+
+/** 读回收站清单。 */
+export async function fetchTrash(): Promise<{ root: string; entries: TrashEntry[] }> {
+  const response = await fetch(`${PREFIX}/trash/list`, { credentials: 'same-origin' })
+  return (await unwrap(response)) as { root: string; entries: TrashEntry[] }
+}
+
+/** 从回收站恢复(原位置被占用则报错)。 */
+export async function restoreTrash(
+  sessionId: string,
+  id: string,
+): Promise<{ path: string; note: TreeNote }> {
+  return call('trash/restore', { sessionId, id })
+}
+
+/** 彻底删除(`all` = 清空回收站)。 */
+export async function purgeTrash(id: string | null, all = false): Promise<{ removed: number }> {
+  return call('trash/purge', all ? { all: true } : { id })
+}
+
 /** 把外部内容导入成笔记(拖进来的 `.md`)。 */
 export async function importNote(
   sessionId: string,

@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { HIDE, LINE, MARK, WIDGET, cursorInRange, decideDecorations, lineIndex } from '../lib/markdown-render.js'
+import { markdownSyntaxConfig } from '../lib/markdown-syntax.js'
 
 /**
  * 语法树直接用 `@codemirror/lang-markdown` 的 lezer 语言(纯 JS,不需要 DOM)。
@@ -173,6 +174,27 @@ test('代码围栏:还原态区分围栏两行(codeOpen/codeClose)—— 卡片�
   const text = '```js\nconst a = 1\n```\n'
   const descs = decide(text, [{ from: 12, to: 12 }]) // 光标落在 `const a = 1` 这一行里
   assert.deepEqual(only(descs, LINE).map((item) => item.cls), ['codeOpen', 'code', 'codeClose'])
+})
+
+test('公式:独占整段(含多行 `$$…$$`)不在决策层出 widget —— 交给 StateField 做块级', () => {
+  // 自定义节点(`$$…$$` 等)来自我们自己的 lezer 扩展,所以这里单独配一次解析器。
+  const mathParser = markdownLanguage.parser.configure(markdownSyntaxConfig())
+  const decideMath = (text) =>
+    decideDecorations({
+      tree: mathParser.parse(text),
+      text,
+      selection: [{ from: text.length, to: text.length }],
+      reveal: true,
+    })
+  // 用户实测:`$$\na=1\n$$` 以前完全渲染不出来。这种独占整段的公式必须走 StateField
+  // (插件层不能跨行替换),决策层这里就该**什么都不发**,否则会和块级 widget 重叠。
+  for (const text of ['$$\na=1\n$$\n', '$$x$$\n']) {
+    const descs = decideMath(text)
+    assert.equal(only(descs, WIDGET).length, 0, `${JSON.stringify(text)} 不该在决策层出 widget`)
+  }
+  // 夹在文字中间的 `$$x$$` 仍是行内 widget
+  const inline = decideMath('前 $$x$$ 后\n')
+  assert.deepEqual(only(inline, WIDGET).map((item) => item.widget), ['math'])
 })
 
 test('表格:表头/分隔行/数据行的行装饰', () => {

@@ -47,6 +47,8 @@ export interface TreePaneProps {
   onRegisterPath: (path: string) => void
   /** 关掉错误提示。 */
   onDismissError: () => void
+  /** 删除笔记 = 移入回收站(文件可恢复)。 */
+  onTrash?: (note: TreeNote) => void
   /** 正在行内改名的行 key(`n:<id>` / `c:<id>`)。 */
   renamingKey?: string | null
   /** 提交笔记改名(行内输入回车/失焦)。 */
@@ -679,6 +681,7 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                   {item(t('menu.newNoteHere'), () => props.onNewNote(menu.row.parentId ?? null))}
                   <div className="dsh-notes-menu-sep" />
                   {item(t('menu.unregister'), () => props.onUnregister(note))}
+                  {item(t('menu.trash'), () => props.onTrash?.(note))}
                 </>
               )
             }
