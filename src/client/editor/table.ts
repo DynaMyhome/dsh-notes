@@ -10,13 +10,14 @@
  */
 
 import { EditorState, RangeSet, StateField, type Extension } from '@codemirror/state'
-import { syntaxTree, ensureSyntaxTree } from '@codemirror/language'
-import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
+import { HighlightStyle, syntaxTree, ensureSyntaxTree, syntaxHighlighting } from '@codemirror/language'
+import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '@codemirror/view'
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 
 import { isSourceMode } from './mode'
-import { jsxLanguage, tsxLanguage, javascriptLanguage, typescriptLanguage } from '@codemirror/lang-javascript'
-import { jsonLanguage } from '@codemirror/lang-json'
-import { pythonLanguage } from '@codemirror/lang-python'
+import { jsxLanguage, tsxLanguage, javascript, javascriptLanguage, typescriptLanguage } from '@codemirror/lang-javascript'
+import { json, jsonLanguage } from '@codemirror/lang-json'
+import { python, pythonLanguage } from '@codemirror/lang-python'
 import { highlightTree, tagHighlighter, tags as tokenTags } from '@lezer/highlight'
 
 /** 一个单元格:文本 + 它在**文档中的绝对范围**。 */
@@ -269,6 +270,43 @@ function paintCode(target: HTMLElement, code: string, language: string): void {
   }
 }
 
+
+/** 内层编辑器用的语言扩展(函数形式才是合法的 Extension)。 */
+const CODE_EXTENSIONS: Record<string, () => import('@codemirror/state').Extension> = {
+  js: () => javascript(),
+  javascript: () => javascript(),
+  mjs: () => javascript(),
+  cjs: () => javascript(),
+  jsx: () => javascript({ jsx: true }),
+  ts: () => javascript({ typescript: true }),
+  typescript: () => javascript({ typescript: true }),
+  tsx: () => javascript({ jsx: true, typescript: true }),
+  json: () => json(),
+  jsonc: () => json(),
+  py: () => python(),
+  python: () => python(),
+}
+
+/** 内层编辑器的高亮(颜色与卡片一致,走主题变量)。 */
+const INNER_HIGHLIGHT = HighlightStyle.define([
+  { tag: tokenTags.keyword, color: 'var(--dsw-alias-onboarding-accent)' },
+  { tag: tokenTags.string, color: 'var(--dsw-alias-state-success-primary)' },
+  { tag: [tokenTags.number, tokenTags.bool, tokenTags.null, tokenTags.atom], color: 'var(--dsw-alias-state-business-primary)' },
+  { tag: [tokenTags.comment, tokenTags.lineComment, tokenTags.blockComment], color: 'var(--dsw-alias-label-caption)', fontStyle: 'italic' },
+  { tag: [tokenTags.typeName, tokenTags.className, tokenTags.namespace], color: 'var(--dsw-alias-state-business-primary)' },
+  { tag: [tokenTags.function(tokenTags.variableName), tokenTags.labelName], color: 'var(--dsw-alias-label-primary)' },
+  { tag: tokenTags.invalid, color: 'var(--dsw-alias-state-error-primary)' },
+])
+
+/** 内层编辑器的外观:与卡片正文同观感(透明底、等宽、无额外内边距)。 */
+const INNER_THEME = EditorView.theme({
+  '&': { backgroundColor: 'transparent', fontSize: '0.9em' },
+  '.cm-content': { fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)', padding: '0', caretColor: 'var(--dsw-alias-label-primary)' },
+  '.cm-scroller': { fontFamily: 'inherit', lineHeight: '1.6', padding: '0', cursor: 'text' },
+  '.cm-gutters': { display: 'none' },
+  '&.cm-focused': { outline: 'none' },
+})
+
 /**
  * 代码块卡片:圆角 + 顶栏(语言名 / 复制按钮)+ 等宽正文。
  *
@@ -294,11 +332,20 @@ class CodeCardWidget extends WidgetType {
   }
 
   eq(other: CodeCardWidget): boolean {
-    return other.source === this.source
+    return other.source === this.source && other.from === this.from
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const { language, code } = this.parts()
+    const lines = this.source.split('\n')
+    const first = lines[0] ?? ''
+    const last = lines[lines.length - 1] ?? ''
+    const fence = /^\s*(```|~~~)/.exec(first)?.[1] ?? '```'
+    const bodyFrom = this.from + first.length + 1
+    const bodyTo = /^\s*(?:```|~~~)/.test(last)
+      ? this.from + this.source.length - last.length - 1
+      : this.from + this.source.length
+
     const card = document.createElement('div')
     card.className = 'dsh-cm-code-card'
     const bar = document.createElement('div')
@@ -307,39 +354,6 @@ class CodeCardWidget extends WidgetType {
     label.className = 'dsh-cm-code-lang-label'
     label.textContent = language === '' ? 'text' : language
     label.title = '点击修改语言'
-    // 点语言名 → 就地改围栏首行(方便换语言,不用切源码模式)
-    label.addEventListener('mousedown', (event) => {
-      event.preventDefault()
-      const first = this.source.split('\n')[0] ?? ''
-      const fence = /^\s*(```|~~~)/.exec(first)?.[1] ?? '```'
-      const box = document.createElement('input')
-      box.className = 'dsh-cm-code-lang-input'
-      box.value = language
-      const commit = (save: boolean): void => {
-        const next = box.value.trim()
-        if (save && next !== language) {
-          view.dispatch({ changes: { from: this.from, to: this.from + first.length, insert: fence + next } })
-        } else {
-          bar.replaceChild(label, box)
-        }
-        view.focus()
-      }
-      box.addEventListener('keydown', (keyEvent) => {
-        keyEvent.stopPropagation()
-        if (keyEvent.key === 'Enter') {
-          keyEvent.preventDefault()
-          commit(true)
-        } else if (keyEvent.key === 'Escape') {
-          keyEvent.preventDefault()
-          commit(false)
-        }
-      })
-      box.addEventListener('blur', () => commit(true))
-      bar.replaceChild(box, label)
-      box.focus()
-      // 不全选:光标落末尾(不要一编辑就把 JS 全选中)
-      box.setSelectionRange(box.value.length, box.value.length)
-    })
     const copy = document.createElement('button')
     copy.type = 'button'
     copy.className = 'dsh-cm-code-copy'
@@ -352,66 +366,127 @@ class CodeCardWidget extends WidgetType {
         copy.textContent = '复制'
       }, 1200)
     })
-    bar.append(label, copy)
-    const pre = document.createElement('pre')
-    pre.className = 'dsh-cm-code-body'
-    const codeEl = document.createElement('code')
-    paintCode(codeEl, code, language)
-    pre.appendChild(codeEl)
-    // 就地编辑:点正文 → 换成 textarea(提交后写回围栏内的正文区间)
-    pre.addEventListener('mousedown', (event) => {
-      // 已经在编辑态(点在 textarea 里):交给原生选择,不要再重开输入框
-      const hit = event.target as HTMLElement | null
-      if (hit !== null && hit.closest('textarea, input') !== null) return
+    // 语言名就地改(写回围栏首行)
+    label.addEventListener('mousedown', (event) => {
       event.preventDefault()
-      const box = document.createElement('textarea')
-      box.className = 'dsh-cm-code-input'
-      box.value = code
-      // 行数贴合原代码 → 进入编辑时高度不变,下面的内容不会被顶走(踩过)
-      box.rows = Math.max(1, code.split('\n').length)
-      const lines = this.source.split('\n')
-      const first = lines[0] ?? ''
-      const last = lines[lines.length - 1] ?? ''
-      const bodyFrom = this.from + first.length + 1
-      const bodyTo = /^\s*(?:```|~~~)/.test(last) ? this.from + this.source.length - last.length - 1 : this.from + this.source.length
-      let done = false
-      const commit = (save: boolean): void => {
-        if (done) return
-        done = true
-        if (save && box.value !== code) {
-          view.dispatch({ changes: { from: bodyFrom, to: bodyTo, insert: box.value } })
+      const box = document.createElement('input')
+      box.className = 'dsh-cm-code-lang-input'
+      box.value = language
+      const commitLang = (save: boolean): void => {
+        const next = box.value.trim()
+        if (save && next !== language) {
+          view.dispatch({ changes: { from: this.from, to: this.from + first.length, insert: fence + next } })
         } else {
-          pre.replaceChildren(codeEl)
+          bar.replaceChild(label, box)
         }
         view.focus()
       }
       box.addEventListener('keydown', (keyEvent) => {
         keyEvent.stopPropagation()
-        if (keyEvent.key === 'Escape' || (keyEvent.key === 'Enter' && (keyEvent.metaKey || keyEvent.ctrlKey))) {
+        if (keyEvent.key === 'Enter') {
           keyEvent.preventDefault()
-          commit(keyEvent.key !== 'Escape')
+          commitLang(true)
+        } else if (keyEvent.key === 'Escape') {
+          keyEvent.preventDefault()
+          commitLang(false)
         }
       })
-      box.addEventListener('input', () => {
-        // 回车换行后自动长高(否则新行被 scroll 吃掉,看起来像加不了行)
-        box.rows = Math.max(1, box.value.split('\n').length)
-      })
-      box.addEventListener('blur', () => commit(true))
-      pre.replaceChildren(box)
+      box.addEventListener('blur', () => commitLang(true))
+      bar.replaceChild(box, label)
       box.focus()
       box.setSelectionRange(box.value.length, box.value.length)
     })
-    card.append(bar, pre)
+    bar.append(label, copy)
+
+    const body = document.createElement('div')
+    body.className = 'dsh-cm-code-body'
+    /** 静态渲染(高亮,不可编辑)。 */
+    const renderStatic = (): void => {
+      const pre = document.createElement('pre')
+      pre.className = 'dsh-cm-code-pre'
+      const codeEl = document.createElement('code')
+      paintCode(codeEl, code, language)
+      pre.appendChild(codeEl)
+      body.replaceChildren(pre)
+    }
+    renderStatic()
+
+    // 编辑:挂一个**真正的 CodeMirror 实例**在卡片里(ProseMirror 官方 embedded-code-editor
+    // 与 Milkdown 都是这个做法)。这样多行选择、中文输入法、撤销、搜索全是原生的,
+    // 不再有 textarea 那堆毛病。
+    let inner: EditorView | null = null
+    const mountEditor = (): void => {
+      if (inner !== null) return
+      const languageExtension = CODE_EXTENSIONS[language.toLowerCase()]
+      inner = new EditorView({
+        state: EditorState.create({
+          doc: code,
+          extensions: [
+            ...(languageExtension === undefined ? [] : [languageExtension()]),
+            syntaxHighlighting(INNER_HIGHLIGHT),
+            history(),
+            keymap.of([...defaultKeymap, ...historyKeymap]),
+            EditorView.lineWrapping,
+            INNER_THEME,
+          ],
+        }),
+        parent: body,
+      })
+      inner.focus()
+      inner.dispatch({ selection: { anchor: inner.state.doc.length } })
+    }
+    /** 回写外层文档(只在失焦/显式提交时,**不能每次改动都回写**:那会重建 widget 把内层编辑器销毁)。 */
+    const commit = (save: boolean): void => {
+      if (inner === null) return
+      const next = inner.state.doc.toString()
+      const editor = inner
+      inner = null
+      editor.destroy()
+      if (save && next !== code) {
+        view.dispatch({ changes: { from: bodyFrom, to: bodyTo, insert: next } })
+      } else {
+        renderStatic()
+      }
+      view.focus()
+    }
+    body.addEventListener('mousedown', (event) => {
+      const hit = event.target as HTMLElement | null
+      if (hit !== null && hit.closest('.cm-editor') !== null) return
+      event.preventDefault()
+      mountEditor()
+    })
+    body.addEventListener('keydown', (event) => {
+      // 内层编辑器自己处理按键;这里只接 Esc / Ctrl-Enter 提交
+      if (inner === null) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        commit(false)
+      } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault()
+        event.stopPropagation()
+        commit(true)
+      }
+    })
+    body.addEventListener('focusout', () => {
+      // 焦点离开卡片(且不是进到内层编辑器里的元素)才算失焦提交
+      window.setTimeout(() => {
+        if (inner === null) return
+        if (card.contains(document.activeElement)) return
+        commit(true)
+      }, 0)
+    })
+
+    card.append(bar, body)
     return card
   }
 
   ignoreEvent(): boolean {
-    // widget 内部有自己的交互(输入框/复选框),不让 CM6 再处理这些事件
+    // 卡片内部有真正的编辑器/输入框,不让外层 CM6 处理这些事件
     return true
   }
 }
 
-/** 导出成扩展(塞进编辑器 extensions 即可)。 */
 export function tableBlocks(): Extension {
   return StateField.define<DecorationSet>({
     create: (state) => buildTableDecorations(state),
