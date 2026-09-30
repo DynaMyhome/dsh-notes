@@ -40,9 +40,17 @@ export function frontmatterSpan(text: string): { from: number; to: number } | nu
  * @returns 光标位置(没有 frontmatter 时 0)。
  */
 export function initialAnchor(text: string): number {
-  const span = frontmatterSpan(text)
-  if (span === null) return 0
-  let anchor = span.to
-  while (anchor < text.length && (text[anchor] === '\n' || text[anchor] === '\r')) anchor += 1
-  return anchor
+  if (text.length === 0) return 0
+  // 打开笔记时的初始光标放在**最后一行**。
+  //
+  // 为什么不是开头:预览模式会"光标所在行显示源码"(需要就地编辑),而初始光标若落在
+  // 第一行,那一行的标记(`#` 标题等)就会一直**展开**着,看起来像没渲染(用户实测:
+  // "每个新打开的笔记第一行总是展开的,必须点一下别处才行")。放文末既避开第一行,
+  // 又正好是"继续往下写"的位置。
+  const lines = text.split('\n')
+  let offset = 0
+  for (let index = 0; index < lines.length - 1; index += 1) offset += lines[index].length + 1
+  const last = lines[lines.length - 1]
+  // 末行是空行时,光标放这一行(而不是加一个字符);否则放行尾
+  return last.trim() === '' ? offset : offset + last.length
 }
