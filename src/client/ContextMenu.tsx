@@ -88,16 +88,19 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
   }, [props.x, props.y])
 
   useEffect(() => {
+    // **用 click 而不是 mousedown 判"点了外面"**:菜单项的动作走的是 click,
+    // 若在 mousedown 阶段就把菜单关掉,按钮已被卸载 → click 落空,表现为"点了没反应"
+    // (用户实测:树右键里的「删除(移入回收站)」毫无反应)。
     const onDown = (event: MouseEvent): void => {
       if (ref.current?.contains(event.target as Node) !== true) props.onClose()
     }
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') props.onClose()
     }
-    document.addEventListener('mousedown', onDown, true)
+    document.addEventListener('click', onDown, true)
     document.addEventListener('keydown', onKey)
     return () => {
-      document.removeEventListener('mousedown', onDown, true)
+      document.removeEventListener('click', onDown, true)
       document.removeEventListener('keydown', onKey)
     }
   }, [props])
@@ -151,6 +154,8 @@ export function ContextMenu(props: ContextMenuProps): React.ReactElement {
       style={{ left: pos.x, top: pos.y }}
       // 离开整个菜单才收起子菜单(而不是离开某一行)
       onMouseLeave={() => setOpenSub(null)}
+      // 菜单自己的按下事件不要穿透到下面的树行(否则会顺带"选中/打开"笔记)
+      onMouseDown={(event) => event.stopPropagation()}
     >
       {renderEntries(props.entries, 0)}
     </div>
