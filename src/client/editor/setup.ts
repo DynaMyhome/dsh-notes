@@ -585,10 +585,14 @@ const theme = EditorView.theme({
   '.cm-scroller': {
     fontFamily: 'var(--dsw-font, inherit)',
     lineHeight: '1.7',
-    padding: '10px 14px 40vh',
+    // 内边距必须放**内容区里面**:放在 scroller 上时,那片空白不属于 .cm-content,
+    // 点击不会落光标、鼠标也不是文本光标(实测 Obsidian 是 I 形且点了落到文末)。
+    padding: '0',
+    cursor: 'text',
   },
   // min-height:100% 让内容区铺满编辑区 —— 点最后一行下方的空白也能落光标(Obsidian 手感)
-  '.cm-content': { caretColor: 'var(--dsw-alias-brand-primary)', maxWidth: '860px', minHeight: '100%' },
+  // min-height:100% + padding 都在内容区上:最后一行下方的空白也能落光标(Obsidian 手感)
+  '.cm-content': { caretColor: 'var(--dsw-alias-brand-primary)', maxWidth: '860px', minHeight: '100%', padding: '10px 14px 40vh' },
   '.cm-line': { padding: '0' },
   '&.cm-focused': { outline: 'none' },
   '.cm-cursor,.cm-dropCursor': { borderLeftColor: 'var(--dsw-alias-brand-primary)' },
@@ -865,6 +869,18 @@ export function createEditor(options: {
       livePreview(options.documentPath, options.getKnownTitles),
       // 块级装饰必须来自 StateField(CM6 禁止插件提供跨行替换):真表格 + 单元格交互
       tableBlocks(),
+      // 点在内容区之外(下方空白/右侧留白):把光标放到文末并聚焦 —— 与 Obsidian 一致。
+      // 点在内容区内不拦(交给 CM6 自己按坐标定位)。
+      EditorView.domEventHandlers({
+        mousedown(event, view) {
+          const target = event.target as HTMLElement | null
+          if (target === null || target.closest('.cm-content') !== null) return false
+          event.preventDefault()
+          view.dispatch({ selection: { anchor: view.state.doc.length } })
+          view.focus()
+          return true
+        },
+      }),
       theme,
       // 图片:粘贴或拖入 → 交给外壳上传(见 NotesPane)
       EditorView.domEventHandlers({
