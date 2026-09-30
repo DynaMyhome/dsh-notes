@@ -603,7 +603,7 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                       return
                     }
                     if (row.kind === 'collection') props.onRenameCollection?.(row.id, value)
-                    else if (row.note !== undefined) props.onRenameNote?.(row.id, value)
+                    else if (row.note !== undefined) props.onRenameNote?.(row.key.startsWith('n:') ? row.key.slice(2) : row.key, value)
                   }}
                   onKeyDownCapture={(event) => {
                     if (event.key === 'Enter') {
