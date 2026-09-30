@@ -940,14 +940,17 @@ export function createEditor(options: {
             view.focus()
             return true
           }
-          const line = Array.from(content.querySelectorAll('.cm-line')).find((el) => {
-            const rect = el.getBoundingClientRect()
-            return event.clientY >= rect.top && event.clientY <= rect.bottom
-          })
-          if (line === undefined) return false
-          const rect = line.getBoundingClientRect()
-          // 用该行的垂直中点解析位置:指针落在这一行内就归这一行
-          const pos = view.posAtCoords({ x: event.clientX, y: rect.top + rect.height / 2 })
+          // 用 elementFromPoint **精确命中指针所在的那一行**。
+          // (早先是遍历所有行的矩形来找,代码块这种"行背景连成一片"的区域会选错行 ——
+          //  实测点 `test、` 后面会被丢到块尾 `丢掉` 后面,怎么点都回不去。)
+          const hitLine = (document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null)?.closest(
+            '.cm-line',
+          ) as HTMLElement | null
+          if (hitLine === null) return false
+          const rect = hitLine.getBoundingClientRect()
+          // y 夹在这一行内部再解析位置:指针在这一行里就归这一行(修"下移一点就跳下一行")
+          const y = Math.min(Math.max(event.clientY, rect.top + 2), rect.bottom - 2)
+          const pos = view.posAtCoords({ x: event.clientX, y })
           if (pos === null) return false
           view.dispatch({ selection: { anchor: pos } })
           view.focus()
