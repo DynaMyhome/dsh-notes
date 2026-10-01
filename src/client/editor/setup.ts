@@ -673,10 +673,31 @@ const theme = EditorView.theme({
     // 点击不会落光标、鼠标也不是文本光标(实测 Obsidian 是 I 形且点了落到文末)。
     padding: '0',
     cursor: 'text',
+    // **正文永远不该出现横向滚动条**(照 Typora):正文一律换行自适应。
+    // 唯一允许横向滚动的是**表格**(它自己有一个 `overflow-x:auto` 的外壳,见
+    // `.dsh-cm-table-wrap`)。这一条是硬兜底:配合下面 `.cm-content` 的
+    // `overflow-wrap:anywhere`,再长的 URL / 路径 / 公式串也只会换行,不会把整篇顶宽。
+    overflowX: 'hidden',
   },
   // min-height:100% 让内容区铺满编辑区 —— 点最后一行下方的空白也能落光标(Obsidian 手感)
   // min-height:100% + padding 都在内容区上:最后一行下方的空白也能落光标(Obsidian 手感)
-  '.cm-content': { caretColor: 'var(--dsw-alias-brand-primary)', maxWidth: '860px', minHeight: '100%', padding: '10px 14px 40vh' },
+  '.cm-content': {
+    caretColor: 'var(--dsw-alias-brand-primary)',
+    maxWidth: '860px',
+    minHeight: '100%',
+    padding: '10px 14px 40vh',
+    // **这一条是"正文不横向滚动"的关键**。CM6 把 `.cm-content` 做成了 `.cm-scroller`
+    // 里的 flex item(`flex-grow:2; flex-shrink:0`),而 flex item 的 `min-width:auto`
+    // 等于它的 **min-content 宽度** —— 表格一宽,min-content 就把内容区撑到比滚动区还宽,
+    // 于是**正文也跟着在更宽的宽度上换行**,整篇都要左右拖(实测:滚动区 clientWidth 384、
+    // 内容区 clientWidth 687)。`min-width:0` 让内容区老老实实等于滚动区宽度,
+    // 宽表格就交给它自己那个 `overflow-x:auto` 的外壳去滚。
+    minWidth: '0',
+    // 长到没有空格的串(URL、`/mnt/d/...` 路径、`$C_{FB,opt}=\dfrac{\sqrt2}{\omega_{CL}R_F}$`)
+    // 在默认规则下**不换行**,会把正文顶宽 → 整篇左右滚(用户实测)。`anywhere` 允许在
+    // 任意位置断开,配合 `.cm-scroller` 的 `overflow-x:hidden`,正文就彻底没有横向滚动条了。
+    overflowWrap: 'anywhere',
+  },
   '.cm-line': { padding: '0' },
   '&.cm-focused': { outline: 'none' },
   '.cm-cursor,.cm-dropCursor': { borderLeftColor: 'var(--dsw-alias-brand-primary)' },
@@ -928,13 +949,18 @@ const theme = EditorView.theme({
   },
   '.dsh-cm-table-row': { fontFamily: 'var(--dsw-font-mono, ui-monospace, monospace)' },
   '.dsh-cm-bullet': { color: 'var(--dsw-alias-label-secondary)', paddingRight: '2px' },
-  '.dsh-cm-table-wrap': { padding: '6px 0' },
+  // **表格自己滚动**(照 Typora):列多时只有表格出横向滚动条,**正文与编辑区不被撑宽**。
+  // `max-width: 100%` 是这条的全部关键 —— 少了它,宽表格会把 `.cm-content` 一起顶宽,
+  // 于是整篇都得左右滚才能看完(用户实测:"分屏的时候整篇得左右滚动")。
+  // `overscroll-behavior-x: contain` 让滚到表格尽头时不把滚动传给外层。
+  '.dsh-cm-table-wrap': { padding: '6px 0', maxWidth: '100%', overflowX: 'auto', overscrollBehaviorX: 'contain' },
   '.dsh-cm-table': {
     borderCollapse: 'collapse',
     fontSize: '0.95em',
-    // 铺满编辑区(照 Typora)。以前是 `fit-content`,实测表格只有 123px 宽、
-    // 而正文宽 189px —— 看起来就像"表格没占满"。
-    width: '100%',
+    // 窄表格仍**铺满编辑区**(照 Typora):以前是 `fit-content`,实测表格只有 123px 宽、
+    // 而正文宽 189px —— 看起来就像"表格没占满"。宽表格则由 max-content 撑开、交给外层滚动。
+    width: 'max-content',
+    minWidth: '100%',
     tableLayout: 'auto',
   },
   '.dsh-cm-table th, .dsh-cm-table td': {
@@ -949,14 +975,25 @@ const theme = EditorView.theme({
     textAlign: 'left',
     verticalAlign: 'top',
     minWidth: '48px',
+    // 单元格自己**换行**(照 Typora):一格里塞一段长文字不该把这一列拉成几千像素宽。
+    // `anywhere` 是为了让 `$C_{FB,opt}=\dfrac{\sqrt2}{\omega_{CL}R_F}$` 这类
+    // 没有空格的长串也能断行。
+    maxWidth: '32em',
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
   },
   '.dsh-cm-table th': {
     fontWeight: '600',
     background: 'var(--dsw-alias-bg-layer-2)',
   },
   '.dsh-cm-task': { verticalAlign: 'middle', marginRight: '6px', accentColor: 'var(--dsw-alias-brand-primary)' },
-  '.dsh-cm-image': { display: 'inline-flex', flexDirection: 'column', gap: '2px', verticalAlign: 'middle' },
-  '.dsh-cm-image img': { maxWidth: '100%', maxHeight: '320px', borderRadius: '6px', display: 'block' },
+  // 图片必须**跟着正文宽度自适应**(用户实测:"渲染的图片也要跟着横向宽度自适应")。
+  // `inline-flex` 的宽度是由内容(也就是图片本身)决定的,父元素再写 `max-width:100%`
+  // 也只是相对自己 —— 一张 2000px 宽的图照样把正文顶宽。修法是两件一起做:
+  //   ① 外壳有 `max-width:100%`(百分比相对**行/内容区**的宽度解析,这才是真正的约束);
+  //   ② 图片 `max-width:100% + height:auto`(只缩不放,且保持长宽比,不变形)。
+  '.dsh-cm-image': { display: 'inline-flex', flexDirection: 'column', gap: '2px', verticalAlign: 'middle', maxWidth: '100%' },
+  '.dsh-cm-image img': { maxWidth: '100%', height: 'auto', maxHeight: '320px', objectFit: 'contain', borderRadius: '6px', display: 'block' },
   '.dsh-cm-image-caption': { fontSize: cssSize(11), color: 'var(--dsw-alias-label-secondary)' },
 })
 
@@ -1062,8 +1099,10 @@ export function createEditor(options: {
       syntaxHighlighting(highlight),
       search({ top: true }),
       livePreview(options.documentPath, options.getKnownTitles, sourceMode, options.strings?.chipExpand),
-      // 块级装饰必须来自 StateField(CM6 禁止插件提供跨行替换):真表格 + 单元格交互
-      tableBlocks(sourceMode, options.strings),
+      // 块级装饰必须来自 StateField(CM6 禁止插件提供跨行替换):真表格 + 单元格交互。
+      // knownTitles 一并转发 —— 单元格里的 `[[双链]]` 要与正文用**同一份**标题表,
+      // 否则同一篇笔记在正文里是蓝色、在表格里却是"不存在"的样式。
+      tableBlocks(sourceMode, options.strings, options.getKnownTitles),
       // 点**内容区之外**的空白(下方留白 / 右侧留白)→ 光标落文末并聚焦(Obsidian 手感)。
       //
       // 教训一:内容区**之内**的落点判定一律交回 CM6 自己 —— 曾经在这里推算 y 再

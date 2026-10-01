@@ -94,6 +94,24 @@ test('POST 路由:JSON body 必须合并进 handler 入参(回归:曾只传 {req
   assert.deepEqual(JSON.parse(res.body), { ok: true, value: { id: 'n_1', path: '/ws/notes/x.md' } })
 })
 
+test('POST 路由:大笔记(>64KB)必须能保存 —— 以前的 64KB 闸门让"保存"永远失败', async () => {
+  const seen = []
+  const { ctx, routes } = fakeCtx()
+  installRoutes(ctx, serviceSpy(seen))
+  // 用户实测那篇笔记:123,530 字节(74,160 字符)。旧上限 64KB 会回「请求体过大」,
+  // 而界面上只显示「Save failed」—— 正文其实完全没写下去。
+  const big = '这是一段用来撑大请求体的正文。'.repeat(9000)
+  assert.equal(Buffer.byteLength(big, 'utf8') > 128 * 1024, true, '测试数据本身要超过旧的 64KB 上限')
+  const res = fakeRes()
+  await routes.get(`${ROUTE_PREFIX}/save`)(
+    fakeReq('POST', `${ROUTE_PREFIX}/save`, JSON.stringify({ sessionId: 's-1', path: '/ws/notes/big.md', text: big })),
+    res,
+  )
+  assert.equal(res.status, 200, `大正文不该被闸门挡住:${res.body}`)
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].text.length, big.length, '正文一个字都不能被截断')
+})
+
 test('POST 路由:空 body 也不会抛(交给 service 层校验)', async () => {
   const seen = []
   const { ctx, routes } = fakeCtx()
