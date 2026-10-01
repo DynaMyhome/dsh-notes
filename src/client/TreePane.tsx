@@ -51,6 +51,12 @@ export interface TreePaneProps {
   /** 在某个分类里新建笔记 / 子分类(`null` = 顶层)。 */
   onNewNote: (collectionId: string | null) => void
   onNewCollection: (parentId: string | null) => void
+  /**
+   * 删除分类(**只动树,不动磁盘**)。
+   *
+   * `move-to-parent` = 子分类与笔记上提到父级(默认);`unfile` = 笔记落到未归类。
+   */
+  onDeleteCollection?: (collectionId: string, mode: 'move-to-parent' | 'unfile') => void
   /** 外部文件拖进来:内容导入 / 已知路径登记。 */
   onImportFiles: (files: File[]) => void
   onRegisterPath: (path: string) => void
@@ -617,7 +623,12 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
                       props.onCancelRename?.()
                       return
                     }
-                    if (row.kind === 'collection') props.onRenameCollection?.(row.id, value)
+                    // 行身份一律从 `key` 上取(`c:` / `n:` 前缀 + id)。
+                    // **别用 `row.id`**:`Row` 上从来没有这个字段,取出来是 undefined,
+                    // 于是 `renameCollection(ws, undefined, name)` 返回 false →
+                    // Host 抛「分类不存在」——新建分类(先建默认名、再立刻行内改名)因此
+                    // 看起来是"一建就报错"。这个坑就是 2026-10-01 用户报的那条。
+                    if (row.kind === 'collection') props.onRenameCollection?.(row.key.slice(2), value)
                     else if (row.kind === 'note') props.onRenameNote?.(row.key.startsWith('n:') ? row.key.slice(2) : row.key, value)
                   }}
                   onKeyDownCapture={(event) => {
@@ -692,6 +703,31 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
               return [
                 item('newNote', t('menu.newNote'), () => props.onNewNote(null)),
                 item('newCollection', t('menu.newCollection'), () => props.onNewCollection(null)),
+              ]
+            }
+            // 分类行:新建 + **重命名 + 删除**。
+            //
+            // 删除只动树(索引里的归属),**绝不碰磁盘上的 .md**:
+            //   - 「笔记移到上级」= 子分类与笔记上提到父级(默认);
+            //   - 「笔记留为未归类」= 笔记落到顶层未归类,分类本身消失。
+            // 二级菜单本身就是"两次动作才算",所以不再加一次弹窗确认。
+            if (menu.row.kind === 'collection' && menu.row.key.startsWith('c:')) {
+              const collectionId = menu.row.key.slice(2)
+              return [
+                item('newHere', t('menu.newNoteHere'), () => props.onNewNote(collectionId)),
+                item('newSub', t('menu.newSubCollection'), () => props.onNewCollection(collectionId)),
+                { id: 'sep1', separator: true },
+                item('renameCollection', t('menu.rename'), () => props.onStartRename?.(menu.row.key)),
+                {
+                  id: 'deleteCollection',
+                  label: t('menu.deleteCollection'),
+                  children: [
+                    item('deleteMoveUp', t('menu.deleteMoveUp'), () =>
+                      props.onDeleteCollection?.(collectionId, 'move-to-parent'),
+                    ),
+                    item('deleteUnfile', t('menu.deleteUnfile'), () => props.onDeleteCollection?.(collectionId, 'unfile')),
+                  ],
+                },
               ]
             }
             return [

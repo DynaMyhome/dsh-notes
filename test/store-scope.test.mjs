@@ -164,7 +164,7 @@ test('升级路径:旧整体索引里的工作区被自动迁进 <root>/.dsh-not
   }
 })
 
-test('把工作区复制到别的路径:同一棵树照常读出来(绝对路径按新根重定位)', async () => {
+test('把工作区复制到别的路径:同一棵树照常读出来(索引记相对路径,搬迁零操作)', async () => {
   const base = await mkdtemp(join(tmpdir(), 'dsh-notes-scope-'))
   const rootA = join(base, 'wsA')
   const rootB = join(base, 'wsB')
@@ -173,15 +173,26 @@ test('把工作区复制到别的路径:同一棵树照常读出来(绝对路径
   await writeFile(join(rootA, 'notes', '旧笔记.md'), '---\ndsh-note-id: n_old\n---\n\n正文\n', 'utf8')
   // 先让 A 完成迁移(产生工作区文件),再**整份复制**到 B(模拟"备份/搬到另一台机器")
   const first = await setup({ roots: { 'session-1': rootA }, legacy })
+  let savedInA = null
   try {
     await first.service.tree({ sessionId: 'session-1', force: true })
     await first.service.workspaceOf('session-1')
   } finally {
     await first.service.persist(first.service.registries.keys().next().value)
+    savedInA = JSON.parse(await readFile(join(rootA, '.dsh-notes', 'index.json'), 'utf8'))
     await rm(first.base, { recursive: true, force: true })
   }
   await mkdir(base, { recursive: true })
   await rename(rootA, rootB)
+
+  // **这是相对记法的全部意义**:文件里只留一个绝对路径(`ws.root`,它是锚点),
+  // 笔记与笔记根都是相对的 —— 所以"换个目录 / 换台机器"根本不需要重定位那一趟。
+  const textInA = JSON.stringify(savedInA)
+  assert.equal(textInA.includes(`${rootA}/notes`), false, '笔记路径与笔记根都不该记绝对路径')
+  assert.equal(savedInA.workspaces[workspaceKeyOf(rootA)].root, rootA, 'root 是锚点,必须保留')
+  assert.equal(savedInA.notes.n_old.rel, 'notes/旧笔记.md')
+  assert.equal('path' in savedInA.notes.n_old, false)
+  assert.equal(savedInA.workspaces[workspaceKeyOf(rootA)].notesRootRel, 'notes')
 
   const { base: base2, service } = await setup({ roots: { 'session-2': rootB } })
   try {
@@ -189,11 +200,13 @@ test('把工作区复制到别的路径:同一棵树照常读出来(绝对路径
     assert.equal(tree.workspace.root, rootB, '工作区根是当前路径')
     assert.notEqual(workspaceKeyOf(rootB), workspaceKeyOf(rootA), '换路径 = 换键(前提成立)')
     assert.equal(tree.stats.notes, 1, '笔记条目还在')
-    assert.equal(tree.notes[0].path, join(rootB, 'notes', '旧笔记.md'), '绝对路径必须重定位到新根')
+    assert.equal(tree.notes[0].path, join(rootB, 'notes', '旧笔记.md'), '绝对路径按**当前根**展开')
     assert.equal(tree.notes[0].relPath, 'notes/旧笔记.md')
     assert.equal(tree.collections[0].name, '老分类', '人工组织跟着备份走')
+    assert.equal(tree.workspace.notesRoot, join(rootB, 'notes'), '笔记根也跟着走')
     const saved = JSON.parse(await readFile(join(rootB, '.dsh-notes', 'index.json'), 'utf8'))
     assert.deepEqual(Object.keys(saved.workspaces), [workspaceKeyOf(rootB)], '文件里不该再留旧键')
+    assert.equal(JSON.stringify(saved).includes(rootA), false, '新文件里不该残留旧根')
   } finally {
     await rm(base, { recursive: true, force: true })
     await rm(base2, { recursive: true, force: true })

@@ -31,7 +31,7 @@ import {
   wrapSelection,
   type EditorHandle,
 } from './editor/setup'
-import { initialAnchor } from './editor/frontmatter'
+import { initialAnchor, normalizedLength } from './editor/frontmatter'
 import { applyTableAction, type TableActionKind } from './editor/table-model'
 import type { WidgetStrings } from './editor/table'
 import type { OutlineItem } from './OutlinePane'
@@ -291,7 +291,12 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
           void saveRef.current()
         },
       })
-      if (anchor > 0) editorRef.current?.view.dispatch({ selection: { anchor } })
+      // 夹到文档长度再 dispatch:**CM6 的 `Selection points outside of document`
+      // 是硬抛错**,会把整个编辑器带崩。CRLF 笔记以前就踩在这上面(见
+      // editor/frontmatter.ts 的 initialAnchor 注释)。别处每个 dispatch 也都有同样的夹取。
+      const length = editorRef.current?.view.state.doc.length ?? 0
+      const clamped = Math.max(0, Math.min(anchor, length))
+      if (clamped > 0) editorRef.current?.view.dispatch({ selection: { anchor: clamped } })
       if (scrollTop > 0) editorRef.current.view.scrollDOM.scrollTop = scrollTop
     },
     [note.id, props.getKnownTitles, props.onWikiLink, sessionId, sourceMode],
@@ -328,7 +333,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
         versionRef.current = String(loaded.version)
         docPathRef.current = loaded.absolutePath
         setDocPath(loaded.absolutePath)
-        setLength(loaded.text.length)
+        setLength(normalizedLength(loaded.text))
         outlineRef.current?.(parseOutline(loaded.text))
         // 光标别停在 frontmatter 里(否则"光标进去就展开"会让每次打开都摊开元数据)
         attachRef.current(loaded.text, initialAnchor(loaded.text))
@@ -456,7 +461,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     dirtyRef.current = false
     setConflict(null)
     setSaveState('saved')
-    setLength(conflict.text?.length ?? 0)
+    setLength(normalizedLength(conflict.text ?? ''))
   }, [conflict])
 
   /** 冲突:以本地内容覆盖(用磁盘版本作为前提)。 */

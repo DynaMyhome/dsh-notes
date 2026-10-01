@@ -14,6 +14,7 @@ import {
   mergeSlice,
   normalizeRoots,
   pluckWorkspace,
+  relativizeState,
   resolveStoreScope,
   rootsFile,
   rootsFromLegacy,
@@ -118,6 +119,104 @@ test('adoptWorkspaceKey:键已对上时不动结构;多工作区文件不被误�
   const multi = stateFromJSON(JSON.stringify(demoState()))
   adoptWorkspaceKey(multi, 'k9')
   assert.deepEqual(Object.keys(multi.workspaces).sort(), ['k1', 'k2'], '多工作区时保持原样(不该乱认领)')
+})
+
+test('relativizeState:落盘用相对路径,只剩 root 是绝对的', () => {
+  const state = sliceFor(demoState(), 'k1')
+  const stored = relativizeState(state, 'k1', WS)
+
+  // 笔记:path → rel
+  assert.equal(stored.notes.n_a.rel, 'notes/a.md')
+  assert.equal('path' in stored.notes.n_a, false, '绝对路径不该写进工作区文件')
+  // 笔记根:绝对 → 相对
+  assert.equal(stored.workspaces.k1.notesRootRel, 'notes')
+  assert.equal('notesRoot' in stored.workspaces.k1, false)
+  // 锚点保留
+  assert.equal(stored.workspaces.k1.root, WS)
+  // 不改入参(内存态要继续用绝对路径)
+  assert.equal(state.notes.n_a.path, `${WS}/notes/a.md`)
+  assert.equal(state.workspaces.k1.notesRoot, `${WS}/notes`)
+  // 整个文件里没有工作区内的绝对路径
+  const text = JSON.stringify(stored)
+  assert.equal(text.includes(`${WS}/notes/a.md`), false)
+})
+
+test('相对记法:整份拷到别的根下直接可读(不需要重定位)', () => {
+  // 1) 在 WS 下组织好,落盘成相对记法
+  const stored = relativizeState(sliceFor(demoState(), 'k1'), 'k1', WS)
+  // 2) 整份搬到另一个根(键也变了)
+  const moved = stateFromJSON(JSON.stringify(stored))
+  adoptWorkspaceKey(moved, 'k9', '/elsewhere/ws-2')
+  // 3) 路径按新根展开,一条死路径都没有
+  assert.deepEqual(
+    Object.values(moved.notes).map((note) => note.path).sort(),
+    ['/elsewhere/ws-2/notes/a.md', '/elsewhere/ws-2/notes/b.md'],
+  )
+  assert.equal(moved.workspaces.k9.notesRoot, '/elsewhere/ws-2/notes')
+  assert.equal(moved.workspaces.k9.notesRootRel, 'notes')
+})
+
+test('旧格式(绝对 path)仍然能读,并在装载时补出 rel 完成迁移', () => {
+  const legacy = {
+    schemaVersion: 1,
+    notes: { n_a: { id: 'n_a', workspaceKey: 'k1', path: `${WS}/notes/a.md`, title: 'a' } },
+    workspaces: { k1: { root: WS, name: 'demo', notesRoot: `${WS}/notes`, collections: {}, refs: {}, pins: [], recent: [] } },
+  }
+  const state = stateFromJSON(JSON.stringify(legacy))
+  adoptWorkspaceKey(state, 'k1', WS)
+  assert.equal(state.notes.n_a.rel, 'notes/a.md', '装载时就补出相对记法 → 下次落盘即迁移完')
+  assert.equal(state.notes.n_a.path, `${WS}/notes/a.md`)
+  assert.equal(state.workspaces.k1.notesRootRel, 'notes')
+})
+
+test('旧格式 + 工作区已搬家:先按旧根重定位,再补 rel', () => {
+  const legacy = {
+    schemaVersion: 1,
+    notes: { n_a: { id: 'n_a', workspaceKey: 'k1', path: `${WS}/notes/a.md`, title: 'a' } },
+    workspaces: { k1: { root: WS, name: 'demo', notesRoot: `${WS}/notes`, collections: {}, refs: {}, pins: [], recent: [] } },
+  }
+  const state = stateFromJSON(JSON.stringify(legacy))
+  adoptWorkspaceKey(state, 'k9', '/elsewhere/ws-2')
+  assert.equal(state.notes.n_a.path, '/elsewhere/ws-2/notes/a.md')
+  assert.equal(state.notes.n_a.rel, 'notes/a.md')
+  assert.equal(state.workspaces.k9.notesRoot, '/elsewhere/ws-2/notes')
+})
+
+test('笔记根 = 工作区根本身:notesRootRel 记空串,override 记 "."(两者含义不同)', () => {
+  const state = {
+    schemaVersion: 1,
+    notes: {},
+    workspaces: { k1: { root: WS, name: 'demo', notesRoot: WS, notesRootOverride: WS, collections: {}, refs: {}, pins: [], recent: [] } },
+  }
+  const stored = relativizeState(state, 'k1', WS)
+  assert.equal(stored.workspaces.k1.notesRootRel, '', 'notesRootRel 恒有意义 → 空串就是工作区根本身')
+  // override 的 `''` 表示"没设过",所以"显式设成工作区根"必须是 `'.'`,否则往返一趟就丢
+  assert.equal(stored.workspaces.k1.notesRootOverrideRel, '.')
+  const back = stateFromJSON(JSON.stringify(stored))
+  adoptWorkspaceKey(back, 'k1', WS)
+  assert.equal(back.workspaces.k1.notesRoot, WS)
+  assert.equal(back.workspaces.k1.notesRootOverride, WS, '用户显式选过的笔记根不能丢')
+
+  // 没设过 override 时不该凭空长出一个
+  const plain = relativizeState(
+    { schemaVersion: 1, notes: {}, workspaces: { k1: { root: WS, name: 'demo', notesRoot: `${WS}/notes`, collections: {}, refs: {}, pins: [], recent: [] } } },
+    'k1',
+    WS,
+  )
+  assert.equal('notesRootOverrideRel' in plain.workspaces.k1, false)
+})
+
+test('工作区外的路径不被硬算成相对(宁可原样保留,也不丢真实路径)', () => {
+  const state = {
+    schemaVersion: 1,
+    notes: { n_x: { id: 'n_x', workspaceKey: 'k1', path: '/outside/other.md', title: 'x' } },
+    workspaces: { k1: { root: WS, name: 'demo', notesRoot: WS, collections: {}, refs: {}, pins: [], recent: [] } },
+  }
+  const stored = relativizeState(state, 'k1', WS)
+  assert.equal(stored.notes.n_x.rel, '/outside/other.md')
+  const back = stateFromJSON(JSON.stringify(stored))
+  adoptWorkspaceKey(back, 'k1', WS)
+  assert.equal(back.notes.n_x.path, '/outside/other.md')
 })
 
 test('已知根表:从旧整体索引提取、增删、容错', () => {

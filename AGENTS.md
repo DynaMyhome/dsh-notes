@@ -43,9 +43,15 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 几条不变量:
 
 - **工作区键是派生的,不是数据**:`workspaceKey = sha1(规范化 root)[:12]`。文件里存了也不可信 ——
-  装载时按**当前 root** 重算,并把旧根之下的**绝对路径**(笔记 / 自定义笔记根)按相对位置
-  **重定位**到新根(见 `store.js` 的 `adoptWorkspaceKey`)。少了这一步,搬走的工作区会出来一堆
-  指向旧机器的死路径。
+  装载时按**当前 root** 重算(见 `store.js` 的 `adoptWorkspaceKey`)。
+- **索引里记的是相对路径,只有 `root` 是绝对的**(v0.4.0 起)。这个文件就躺在工作区里,
+  它记的每一篇笔记必然在工作区内,所以 `notes[].rel` / `workspaces[].notesRootRel` 用**工作区相对**
+  记法,装载时按当前根展开(见 `store.js` 的 `relativizeState` / `toAbsolute`)。
+  于是"搬走工作区"是**零操作**;`root` 留着是因为它既是锚点、又是键的来源。
+  旧格式(绝对 `path`)装载时自动补出 `rel`,下次落盘即迁移完。写在边界上的一句总结:
+  **内存里一律绝对,落盘一律相对**,转换只发生在 `registryFor`(读)与 `persist`(写)两个点。
+  唯一的例外是 `storeScope: 'home'`(机器本地一份整体索引,装着多个工作区与跨工作区映射,
+  只有绝对路径说得清"是哪个文件"),它保持旧行为。
 - **点目录天然安全**:两处走目录都 `entry.name.startsWith('.') → continue`,所以
   `.dsh-notes/`(含 `.trash/` 里的 `.md`)永远不会被当成候选笔记重新登记回树。
 - **升级是懒迁移**:`<root>/.dsh-notes/index.json` 不存在而旧的 `$DSH_HOME/knowledge/registry.json`
@@ -53,6 +59,44 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
   (完全旧行为);`knowledge` 工具的 `migrate` op 是**显式**双向搬运(移动语义)。
 - **只读工作区**:读路径(`persistSafe`)只记一次日志、不抛 —— 界面仍能用内存里的索引;
   用户**显式写操作**才如实报错。
+- **笔记根覆盖的 `''` 与 `'.'` 含义不同**(踩过一次):`notesRootOverrideRel` 是**可选**字段,
+  `''`(= 字段缺席)表示"没设过",所以"用户显式把笔记根设成工作区根本身"必须记成 `'.'`;
+  不区分的话往返一趟就丢(会静默退回默认 `notesDir`)。`notesRootRel` 恒有意义,`''` 就是根。
+
+## 时间与行尾(改这两处前先读)
+
+这两个都是"官方接口面不提供,只能自己想办法"的地方,各有一次实测踩坑。
+
+### 「最近」的修改时间从哪来
+
+- 官方 `fs` **不暴露 mtime**:`FsDirEntry` 只有不透明的 `version`/`size`,`FsInfo` /
+  `WorkspaceFileStat` 同样。目录列举也不给时间。
+- 本机 provider(`@deepseek-ai/dsh-fs-local`)的 `versionOf()` 是
+  `` `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}` ``(**第 4 段就是 mtime**)。
+- 所以 `lib/notes.js` 的 `mtimeOfVersion(version)` 做**严格形状校验**:5 段全数字 → 第 4 段纳秒换毫秒;
+  单段纯数字 → 按毫秒(部分替身/provider 这么给);**其它形状一律 0**,调用方回落成路径序。
+- 旧代码写的是 `Number(entry.version) || 0` —— 在真 token 上恒为 NaN→0,于是"最近"悄悄退化成
+  按路径排;**而单测的假 provider 一直用 `String(info.mtimeMs)`,所以永远测不出来**。
+  新测试(`test/service-scan-time.test.mjs`)故意用**真形状**,与运行时同构。
+- ⚠️ **升级 DSH 或换 fs provider 之后要复核这条**:token 形状一变,时间就全变 0(排序退回路径序,
+  界面上是"时间列不显示"),不会报错。
+
+### 行尾必须保住
+
+- 编辑器(CM6)里的文本**恒为 LF**:`EditorState.create({ doc })` 用 `/\r\n?|\n/` 切分重建。
+- `fs.readText` 给的是**磁盘原文**(CRLF 原样),`fs.writeText` 也是**原样写** —— 与官方
+  `editText` 不同,后者会 `restoreLineEndings`。
+- 所以 `service.save()` 写盘前必须 `applyEol(payload, await this.eolOf(target))`(采样文件头,
+  规则与 fs-local 的 `detectLineEndings` 一致:前 4096 字节里 CRLF 占多数 → CRLF)。
+  不做的话,随手保存一篇 CRLF 笔记就把整份文件的行尾改写了(实测那篇 123KB 里有 1244 个 CR)。
+- 同理,`FS_STALE_VERSION` 抛出去的 `currentText` **必须归一成 LF**:客户端那条
+  "磁盘内容 == 我正要写的内容 → 自愈"的分支拿它和编辑器文本(恒 LF)比相等,不归一就永远不相等,
+  于是 CRLF 笔记上误报"文件已被外部修改"。
+- **打开笔记的坐标也必须按 CM6 的切分规则算**:`initialAnchor` 用 `LINE_SPLIT`(`/\r\n?|\n/`)
+  而不是 `'\n'`,否则 CRLF 文件算出来的锚点比 `doc.length` 大 → CM6 抛
+  `Selection points outside of document`(硬抛,编辑器整个带崩)。
+  除此之外 `EditorPane` 里那处 `dispatch({selection})` 还额外 `Math.min(anchor, doc.length)` 夹一次
+  —— 项目里其它每个 dispatch 都有同样的夹取,别再漏。
 
 ## 工作区 md 的三类模型(改动前先读)
 
@@ -200,6 +244,17 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
   跳走后,撤销回上一篇),没有再走文档撤销。
 - **侧栏**:笔记树(右键菜单、拖拽)+ 纳入管理面板(最近 / 文件夹 / 已忽略 + 扫描范围 + 批量)
   + 回收站 + 大纲,四块共用一套 `ContextMenu` / panel 样式。
+- **纳入管理 v0.4.0**:「最近」**默认按修改时间倒序**并显示时间;排序可选
+  时间 / 名称 / 路径 / 大小 × 升降序(`src/client/scan-sort.ts`,纯函数带单测);
+  扫描范围既能手打相对路径,也能点 **「选择目录…」浏览着挑**
+  (`src/client/DirPicker.tsx` + `browse-path.ts`,种子 = 工作区根、不许走出工作区;
+  Host 侧 `setScanRoots` 也接受绝对路径并再校验一次边界)。
+  **不要用 `uiWorkspace.pickDirectory()`** —— 它要 `native` capability,本 profile 组合的是
+  `browse` 后端,调用会被 `directory-picker/unavailable` 拒绝(实测);只用 `listDirectory`,
+  而且拿不到该服务时**藏起入口**而不是报错。服务经 `main.tsx` 的 `ctx.get('uiWorkspace')`
+  **可选**读取(不写进 `dsh.client.inject`,否则最小组合里整个插件起不来)。
+- **分类可改名可删除 v0.4.0**:分类行右键 = 新建 / **重命名** / **删除**(二级菜单:
+  「笔记移到上级分类」或「笔记留为未归类」)。删除**只动树里的归属**,磁盘上一个文件都不碰。
 - **缺 `notes/` 的工作区**:空态卡片 —— 「创建 notes/」或「改用已有目录(按工作区相对路径)」。
 - **字号/图标大小**:标题栏一个 `Aa`(五档预设 + 滑块 + 复位)→ `--dsh-notes-scale`,只作用于笔记区;
   基准字号**跟随**设置 → 通用的「字体大小」。改字号/图标相关的东西前先读上面那节。
@@ -233,9 +288,9 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | --- | --- |
 | `lib/index.js` | Host 半:配置、索引装配、路由注册、`knowledge` 工具 |
 | `lib/service.js` | 工作区解析与切换、扫描(目录前沿续走)、三类分类、回收站、守卫式保存;**每个工作区一份 registry**(`registryFor` / `persist(key)`) |
-| `lib/store.js` | **存储位置决策 + 数据切片(纯函数)**:工作区/机器本地路径、切片与合并、键与根路径的认领;单测 `test/store.test.mjs` |
+| `lib/store.js` | **存储位置决策 + 数据切片 + 路径记法(纯函数)**:工作区/机器本地路径、切片与合并、键的认领、**绝对 ⇄ 工作区相对的转换(`relativizeState` / `toAbsolute` / `toWorkspaceRel`)**;单测 `test/store.test.mjs` |
 | `lib/registry.js` | 按工作区的薄索引(登记/忽略/忽略 glob/扫描根/最近使用) |
-| `lib/notes.js` | 纯函数:路径 / frontmatter / 标题(=文件名)/ glob 匹配 |
+| `lib/notes.js` | 纯函数:路径 / frontmatter / 标题(=文件名)/ glob 匹配 / **`mtimeOfVersion`(版本号 → mtime)** / **`detectEol`·`applyEol`·`normalizeEol`** / `relativeToWorkspace` |
 | `lib/routes.js` | 内容路由 `/dsh-notes/*`(全部接受 `workspaceKey`) |
 | `lib/tool.js` | `knowledge` 工具的两个 op 面 |
 | `lib/markdown-render.js` | **渲染决策层(纯函数)**,单测 `test/markdown-render.test.mjs` |
@@ -251,7 +306,10 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | `src/client/EditorPane.tsx` | 单篇编辑器外壳:**载入 / 切模式重建、守卫式保存 + 卸载 flush + beacon、工具栏(固定右簇)、表格右键、装饰文案** |
 | `src/client/editor/click-hit.ts` | 点击落点**纯函数**(视觉行夹取 + 行内二分),单测 `test/click-hit.test.mjs` |
 | `src/client/TreePane.tsx` | 笔记树(拖拽载荷:`x-dsh-note-id` / `x-dsh-note-title` / `text/plain` = `[[标题]]`) |
-| `src/client/CandidatesPanel.tsx` | 纳入管理面板(最近 / 文件夹 / 已忽略 + 扫描范围) |
+| `src/client/CandidatesPanel.tsx` | 纳入管理面板(最近 / 文件夹 / 已忽略 + 排序 + 扫描范围;**目录选择入口**) |
+| `src/client/scan-sort.ts` | 排序**纯模型**(时间/名称/路径/大小 × 升降序 + 时间显示),单测 `test/scan-sort.test.mjs` |
+| `src/client/browse-path.ts` | 目录浏览器的**纯逻辑**(过滤 SKIP/隐藏项、相对化、面包屑夹取),单测 `test/browse-path.test.mjs` |
+| `src/client/DirPicker.tsx` | 目录选择浮层(breadcrumb + 子目录;种子 = 工作区根;**不许走出工作区**) |
 | `src/client/TrashPane.tsx` / `OutlinePane.tsx` / `QuickOpen.tsx` | 回收站 / 大纲 / 快速打开(`t` 由外壳注入,文案走字典) |
 | `src/client/ContextMenu.tsx` | 共享右键菜单(分组 + 二级菜单 + 视口夹取) |
 | `src/client/editor/setup.ts` | CM6 装配:主题、键位、输入规则、点击命中、工具栏命令、**widget 文案(`strings` 转发)** |
@@ -268,7 +326,7 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
 | `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
-| `test/` | `node --test` 单测(184 条):含 `store`(存储纯函数)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫) |
+| `test/` | `node --test` 单测(**228 条**):含 `store`(存储纯函数 + **相对路径往返/搬迁**)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`service-scan-time`(**真 version token** 的时间排序)、`service-save-eol`(**行尾保真**)、`service-scan-roots`(扫描根的边界)、`browse-path` / `scan-sort` / `frontmatter`(CRLF 坐标) / `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫) |
 
 ## 开发与验证
 
@@ -295,10 +353,25 @@ ln -s /home/phyd/.dsh/profiles/web/node_modules node_modules
 
 - 装/更新:用 `plugin_manager` 的 `install_bundle`(target = 本目录绝对路径),
   **不要**手写 profile 的 `package.json` / `cordis.patch.yml`,**不要**在 profile 里跑 pnpm。
-- **改了客户端** → `npm run build` 后**刷新页面**即可(客户端 bundle 由页面加载,**不需要**
-  `web_restart`);**改了 Host 半**(`lib/*.js` 里除决策层以外的部分)→ 必须 `web_restart`
-  再刷新。`lib/markdown-render.js` / `lib/markdown-syntax.js` 是**打包进 `lib/client.js`** 的,
-  按客户端处理。
+- **改代码基本不用重启(2026-10-01 打通并实测)**,前提是 profile 里这两行配置:
+  - **客户端半**:`npm run build` 写完 `lib/client.js` 后**连页面都不用刷** ——
+    `dsh-client-hmr` 每 500ms stat 一次 bundle,变了就推新 `rev`,`dsh-client-modules` 就地换模块
+    (实测:改一个字典值 → 已打开的页面里文案变了,`rev` 从 `07d32228578e` 变成 `ae363e1ce652`)。
+    代价:组件内部 state 会丢,会话/工作区状态不丢。
+  - **Host 半**(`lib/*.js`):profile 的 `hmr` 行 `root` 里加了本插件的
+    `'/mnt/d/.../dsh-notes/lib'`,改完约 1 秒自动重新导入并替换插件 fiber,**不用重启**
+    (实测:临时加一条路由 → 立刻 200;删掉 → 立刻 404;全程 0 重启)。
+  - **两个必须知道的边界**(都写进 profile 注释了,别再踩):
+    1. `root` **只能给很小的子目录**。给插件根会让 chokidar(默认无限递归 + 跟随软链)递归整个工作区:
+       实测 6530 个 inotify watch 且持续增长、永不 ready,把 WSL 的 drvfs/9p 打满,表现是
+       **端口在听但永不应答**(systemd 仍显示 active,看起来像"启动不了")。只给 `lib/` 是 13 个 watch。
+    2. **WSL 的 inotify 看不见 `/mnt/d`(drvfs)**:独立进程实测,ext4(`/tmp`、`/home`)能收到 `change`,
+       `/mnt/d/...` 收不到**任何**事件 → 必须开 `usePolling`(chokidar 的选项能经 config 透传,
+       `schemastery` 会保留未声明的键,不用给 `@deepseek-ai/dsh-hmr` 打补丁);`interval: 1000`,
+       实测 +0.5% 单核。
+  - 仍然必须重启的:`package.json` / `exports` / 新增依赖 / profile patch 结构变化。
+  - `lib/index.js` 与 `lib/*.js` 是 Host 半;**`lib/markdown-render.js` / `lib/markdown-syntax.js`
+    是打包进 `lib/client.js` 的**,按客户端处理。
 - 验完在 `cordis_inspect_query`(client `Slots`,root `sidebar.right.pane.tab`)里确认占用者含 `dsh-notes`;
   Host 侧看 `Config.listConfigs`(name=dsh-notes)的 `status` 必须是 `schema`,不是 `inactive`。
 

@@ -1,9 +1,13 @@
 /**
  * 纳入管理面板:把工作区里的 md 分成三类来收编。
  *
- * - **候选**(未纳入、还没标记):默认「最近」排序(按 mtime),也可按文件夹分组;
+ * - **候选**(未纳入、还没标记):默认按**修改时间**倒序(也可按名称/路径/大小),或按文件夹分组;
  * - **已忽略**(杂项):一条条精确路径 + 批量 glob 规则,都能一键放回候选;
  * - 顶部一行是统计(笔记 / 候选 / 杂项 / 扫描了多少个文件)。
+ *
+ * 「扫描范围」那一行既能手打相对路径,也能点「选择目录…」**浏览着挑**
+ * (数据来自官方 `uiWorkspace.listDirectory`,见 {@link DirPicker});
+ * 拿不到那个服务时按钮不出现 —— 官方口径是"藏起入口而不是报错"。
  *
  * 这是独立面板(不是树里的内联列表):md 多的仓库里要靠搜索、多选、批量操作才用得动。
  * 所有操作都只动**映射**,不删文件;「忽略」可以撤销(toast 与「已忽略」段都能恢复)。
@@ -12,7 +16,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { FileEntry, FileScan } from './api'
+import type { DirListingLike } from './browse-path'
+import { DirPicker } from './DirPicker'
 import { IconRefresh, IconWarn } from './icons'
+import {
+  DEFAULT_SORT,
+  defaultDirOf,
+  formatStamp,
+  SORT_KEYS,
+  sortFiles,
+  type SortDir,
+  type SortKey,
+  type SortSpec,
+} from './scan-sort'
 
 /** 一段(候选/已忽略)的视图。 */
 type Segment = 'recent' | 'folders' | 'ignored'
@@ -33,6 +49,12 @@ export interface CandidatesPanelProps {
   onIgnore: (payload: { paths?: string[]; globs?: string[]; on?: boolean }) => void
   /** 改「扫描范围」(工作区相对目录;空数组 = 回到 notesDir)。 */
   onScanRoots: (roots: string[]) => void
+  /** 工作区根(绝对路径):给目录浏览器定边界。 */
+  workspaceRoot?: string
+  /** `uiWorkspace.listDirectory`;没有(或服务不可用)就不显示「选择目录…」。 */
+  listDirectory?: (path?: string, signal?: AbortSignal) => Promise<DirListingLike>
+  /** 目录浏览器选定一个绝对路径(由外壳换算/校验后加进扫描范围)。 */
+  onPickRoot?: (absolutePath: string) => void
 }
 
 /** `docs/a/b.md` → `docs/a`。 */
@@ -52,7 +74,15 @@ export function CandidatesPanel(props: CandidatesPanelProps): React.ReactElement
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [folder, setFolder] = useState<string | null>(null)
   const [rootDraft, setRootDraft] = useState('')
+  const [sort, setSort] = useState<SortSpec>(DEFAULT_SORT)
+  const [pickOpen, setPickOpen] = useState(false)
   const searchRef = useRef<HTMLInputElement | null>(null)
+
+  const canPick =
+    typeof props.listDirectory === 'function' &&
+    typeof props.onPickRoot === 'function' &&
+    typeof props.workspaceRoot === 'string' &&
+    props.workspaceRoot !== ''
 
   useEffect(() => {
     searchRef.current?.focus()
@@ -76,22 +106,26 @@ export function CandidatesPanel(props: CandidatesPanelProps): React.ReactElement
   const ignored = scan?.ignored ?? []
   const stats = scan?.stats ?? { notes: 0, candidates: 0, ignored: 0, total: 0, changed: 0, dirs: 0 }
 
-  /** 过滤(搜索/文件夹)。 */
-  const filter = useCallback(
+  /** 过滤(搜索/文件夹)+ 排序。 */
+  const arrange = useCallback(
     (list: FileEntry[]): FileEntry[] => {
       const needle = query.trim().toLowerCase()
-      return list.filter((file) => {
+      const filtered = list.filter((file) => {
         if (folder !== null && folderOf(file.relPath) !== folder) return false
         if (needle === '') return true
         return file.relPath.toLowerCase().includes(needle) || file.title.toLowerCase().includes(needle)
       })
+      return sortFiles(filtered, sort)
     },
-    [folder, query],
+    [folder, query, sort],
   )
 
-  const visible = useMemo(() => filter(segment === 'ignored' ? ignored : candidates), [candidates, filter, ignored, segment])
+  const visible = useMemo(
+    () => arrange(segment === 'ignored' ? ignored : candidates),
+    [arrange, candidates, ignored, segment],
+  )
 
-  /** 文件夹分组(「按文件夹」段用):folder → 文件。 */
+  /** 文件夹分组(「按文件夹」段用):folder → 文件(组内沿用当前排序)。 */
   const groups = useMemo(() => {
     const map = new Map<string, FileEntry[]>()
     for (const file of visible) {
@@ -115,6 +149,9 @@ export function CandidatesPanel(props: CandidatesPanelProps): React.ReactElement
   const pickedFiles = visible.filter((file) => picked.has(file.path))
   const pickedPaths = pickedFiles.map((file) => file.path)
   const pickedRel = pickedFiles.map((file) => file.relPath)
+
+  /** 换排序主键时同时把方向切到该键更顺手的默认值(时间/大小倒序,名称/路径正序)。 */
+  const changeKey = (key: SortKey): void => setSort({ key, dir: defaultDirOf(key) })
 
   return (
     <div
@@ -172,6 +209,34 @@ export function CandidatesPanel(props: CandidatesPanelProps): React.ReactElement
           </div>
         </div>
 
+        {/* 排序(2026-10-01 加):「最近」段默认按修改时间倒序。
+            以前没有入口,而且 Host 侧算出来的时间恒为 0(解析了 provider 的不透明版本号),
+            所以"最近"其实是按路径排的 —— 见 lib/notes.js 的 mtimeOfVersion。 */}
+        <div className="dsh-notes-panel-sort">
+          <span className="dsh-notes-dim">{t('files.sort')}</span>
+          <select
+            className="dsh-notes-input dsh-notes-sort-select"
+            value={sort.key}
+            onChange={(event) => changeKey(event.target.value as SortKey)}
+          >
+            {SORT_KEYS.map((key) => (
+              <option key={key} value={key}>
+                {t(`files.sort${key.charAt(0).toUpperCase()}${key.slice(1)}`)}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="dsh-notes-btn dsh-notes-sort-dir"
+            title={sort.dir === 'asc' ? t('files.dirAsc') : t('files.dirDesc')}
+            onClick={() =>
+              setSort((current) => ({ ...current, dir: (current.dir === 'asc' ? 'desc' : 'asc') as SortDir }))
+            }
+          >
+            {sort.dir === 'asc' ? '↑' : '↓'}
+          </button>
+        </div>
+
         <div className="dsh-notes-panel-scope">
           <span className="dsh-notes-dim">{t('files.scope')}</span>
           {(scan?.scanRoots ?? []).map((root) => (
@@ -200,6 +265,11 @@ export function CandidatesPanel(props: CandidatesPanelProps): React.ReactElement
               setRootDraft('')
             }}
           />
+          {canPick ? (
+            <button type="button" className="dsh-notes-btn" title={t('files.pickTitle')} onClick={() => setPickOpen(true)}>
+              {t('files.pickDir')}
+            </button>
+          ) : null}
           <button
             type="button"
             className="dsh-notes-btn"
@@ -331,6 +401,19 @@ export function CandidatesPanel(props: CandidatesPanelProps): React.ReactElement
           {scan?.truncated === true ? <span className="dsh-notes-dim">{t('files.truncated')}</span> : null}
         </div>
       </div>
+
+      {pickOpen && canPick ? (
+        <DirPicker
+          t={t}
+          root={String(props.workspaceRoot)}
+          listDirectory={props.listDirectory as (path?: string, signal?: AbortSignal) => Promise<DirListingLike>}
+          onClose={() => setPickOpen(false)}
+          onPick={(absolutePath) => {
+            setPickOpen(false)
+            props.onPickRoot?.(absolutePath)
+          }}
+        />
+      ) : null}
     </div>
   )
 }
@@ -345,6 +428,7 @@ function Row(props: {
   onIgnore: () => void
 }): React.ReactElement {
   const { t, file, checked } = props
+  const stamp = formatStamp(file.at)
   return (
     <div className="dsh-notes-panel-row">
       <input type="checkbox" checked={checked} onChange={props.onToggle} aria-label={file.relPath} />
@@ -352,6 +436,7 @@ function Row(props: {
         <span className="dsh-notes-panel-title2">{file.title}</span>
         <span className="dsh-notes-dim dsh-notes-mono">{file.relPath}</span>
       </button>
+      {stamp !== '' ? <span className="dsh-notes-dim dsh-notes-panel-stamp">{stamp}</span> : null}
       {file.id !== null ? <span className="dsh-notes-badge" title={t('files.hadId')}>{t('files.badge')}</span> : null}
       {props.onInclude !== undefined ? (
         <button type="button" className="dsh-notes-btn" onClick={props.onInclude}>

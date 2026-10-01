@@ -63,6 +63,7 @@ import { QuickOpen } from './QuickOpen'
 import { ScaleControl } from './ScaleControl'
 import { readScale, scaleVars, writeScale } from './scale'
 import { CandidatesPanel } from './CandidatesPanel'
+import { relativeToRoot } from './browse-path'
 import { TrashPane } from './TrashPane'
 import { TreePane } from './TreePane'
 
@@ -87,6 +88,18 @@ export interface NotesPaneProps {
    * 所以隐藏期间的后台活儿(4s 轮询)必须自己按这个标志停下。
    */
   useTabInfo?: () => { tab?: { visible?: boolean } }
+  /**
+   * 官方 Client 服务 `uiWorkspace`(可选)。
+   *
+   * **刻意用可选属性而不是硬依赖**:`dsh.client.inject` 里挂上它,最小组合里缺这个包时
+   * 整个插件都起不来;而且本 profile 组合的是 `browse` 后端,`pickDirectory()` 本来就会被
+   * `directory-picker/unavailable` 拒绝 —— 所以只用 `listDirectory`,拿不到就**藏起入口**
+   * (官方对未知 capability 的口径就是"藏起可选项,而不是失败")。
+   */
+  uiWorkspace?: {
+    /** 列一层目录(绝对路径;缺省 = Host 家目录)。 */
+    listDirectory?: (path?: string, signal?: AbortSignal) => Promise<unknown>
+  }
 }
 
 /** 新建输入条的两种模式。 */
@@ -871,6 +884,37 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     void loadFiles()
   }, [loadFiles])
 
+  /**
+   * 目录选择器选中一个**绝对路径** → 换算成工作区相对再加进扫描范围。
+   *
+   * 两边都校验:这里换算只是为了让用户立刻看到人话报错(Host 的
+   * `service.setScanRoots` 还会再拦一次越界,是真正的边界)。
+   */
+  const onPickRoot = useCallback(
+    (absolutePath: string) => {
+      const root = filesScan?.workspace.root ?? tree?.workspace.root ?? ''
+      const mapped = relativeToRoot(root, absolutePath)
+      if (!mapped.ok) {
+        setFilesError(t('files.pickOutside'))
+        return
+      }
+      // 选到工作区根 = 「整个工作区」,与那个按钮同义
+      if (mapped.rel === '') {
+        onScanRoots([''])
+        setStatus(t('status.rootAdded').replace('{p}', t('files.wholeWorkspace')))
+        return
+      }
+      const existing = filesScan?.scanRoots ?? []
+      if (existing.includes(mapped.rel)) {
+        void loadFiles(true)
+        return
+      }
+      onScanRoots([...existing, mapped.rel])
+      setStatus(t('status.rootAdded').replace('{p}', mapped.rel))
+    },
+    [filesScan, loadFiles, onScanRoots, t, tree],
+  )
+
   /** 纳入选中的 md → 重新读树(纳入后它们会出现在笔记树里)。 */
   const onIncludeFiles = useCallback(
     async (paths: string[]) => {
@@ -1125,6 +1169,21 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     [run, t],
   )
 
+  /**
+   * 删除分类:**只动树**。
+   *
+   * 笔记文件与正文一个都不碰(硬不变量 1);被删分类里的笔记要么上提到父级,
+   * 要么落到未归类。两条路都在 Host 的 `registry.deleteCollection` 里(已有单测)。
+   */
+  const onDeleteCollection = useCallback(
+    (collectionId: string, mode: 'move-to-parent' | 'unfile') => {
+      void run('collection', { op: 'delete', collectionId, mode }, () =>
+        setStatus(mode === 'unfile' ? t('status.collectionUnfiled') : t('status.collectionDeleted')),
+      )
+    },
+    [run, t],
+  )
+
   const toggleLabel = treeOpen ? t('tree.collapse') : t('tree.expand')
 
   // 动作区属于**笔记树这一列**(不是区域顶栏):新建笔记 / 新建分类 / 重扫 / 收起。
@@ -1244,6 +1303,13 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           onInclude={(paths) => void onIncludeFiles(paths)}
           onIgnore={(payload) => void onIgnoreFiles(payload)}
           onScanRoots={onScanRoots}
+          workspaceRoot={filesScan?.workspace.root ?? tree?.workspace.root}
+          listDirectory={
+            typeof props.uiWorkspace?.listDirectory === 'function'
+              ? (path, signal) => props.uiWorkspace?.listDirectory?.(path, signal) as never
+              : undefined
+          }
+          onPickRoot={onPickRoot}
         />
       ) : null}
       {trashOpen ? (
@@ -1416,6 +1482,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     onFileAction={onFileAction}
                     onMoveNote={onMoveNote}
                     onMoveCollection={onMoveCollection}
+                    onDeleteCollection={onDeleteCollection}
                     onPin={onPin}
                     onUnregister={onUnregister}
                     onUnregisterIgnore={onUnregisterIgnore}

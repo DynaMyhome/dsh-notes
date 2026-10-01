@@ -3,6 +3,79 @@
 本插件按 [语义化版本](https://semver.org/lang/zh-CN/) 打 tag;`v0.2.0` 是**首个带 tag 的发布**
 (0.1.0 是开发期的初始版本,当时没有打 tag,仓库里也没有 release)。
 
+## v0.4.0 — 可点选目录 / 排序与时间修正 / 分类可改名可删除 / CRLF 笔记打不开 / 索引改记相对路径(2026-10-01)
+
+### 修
+
+- **新建分类立刻报「分类不存在」** —— 行身份取错了字段:`TreePane` 里行内改名用的是
+  `row.id`,而 `Row` 上**从来没有这个字段**(取出来是 `undefined`),于是
+  `renameCollection(ws, undefined, name)` 返回 false,Host 抛「分类不存在」。
+  新建分类走的是"先建默认名、再立刻进 行内改名",所以看起来是**一建就报错**。
+  改成从行 key 上取 id(`c:<id>` / `n:<id>`,笔记那条分支本来就是这么写的)。
+  旁证:用户树里那 5 个还叫「新分类」的分类,就是这条的症状。
+- **「最近」其实不是按时间排** —— Host 用 `Number(entry.version)` 当 mtime,而真 provider
+  (`@deepseek-ai/dsh-fs-local`)的 version 是 `` `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}` ``,
+  `Number(...)` 是 NaN → `at` 恒为 0 → 全部并列 → **实际按路径排**。现在按严格形状解析第 4 段
+  (mtimeNs),认不出的形状一律 0(回落路径序,绝不瞎猜)。**测试替身一直给
+  `String(mtimeMs)`,所以这条在单测里永远测不出来** —— 新测试改用真形状,与运行时同构。
+- **打开 CRLF 笔记报 `Selection points outside of document`** —— CM6 的
+  `EditorState.create({ doc })` 用 `/\r\n?|\n/` 切分重建,CRLF 文件的 `doc.length`
+  **比磁盘原文少掉「CR 的个数」**;`initialAnchor` 拿原文长度当坐标,而那一处
+  `dispatch({selection:{anchor}})` 又是全项目唯一**没夹取**的。用户那篇 123KB / 1244 个 CR
+  的笔记正中:状态栏以前显示 75404,现在是 **74160**(= 75404 − 1244)。
+- **保存会静默把 CRLF 改成 LF** —— `fs.writeText` 是原样写(不像官方 `editText` 会
+  `restoreLineEndings`)。现在保存前采样文件头判断行尾并按原风格写回;
+  `FS_STALE_VERSION` 交出去的 `currentText` 也归一成 LF —— 否则 CRLF 笔记上
+  "磁盘内容 == 我正要写的内容"那条自愈分支永远不成立,会误报外部修改。
+
+### 新增
+
+- **「选择目录…」:扫描范围不再只能手打。** 面板内浏览器(面包屑 + 子目录列表,
+  种子 = **工作区根**,且不许走出工作区;点目录/`SKIP_DIRS` 不给,免得选了也是空的)。
+  数据来自官方 `uiWorkspace.listDirectory`;拿不到该服务时按钮**不出现**(官方口径:
+  藏起入口而不是失败)。**特意没用 `pickDirectory()`** —— 它要 `native` capability,
+  而本 profile 组合的是 `browse` 后端,调用会被 `directory-picker/unavailable` 拒绝(实测)。
+- **排序**:候选/杂项两段支持 时间 / 名称 / 路径 / 大小 × 升降序;「最近」默认**时间倒序**;
+  每行显示修改时间(认不出时间的文件不显示那列 —— 不拿假时间骗人)。
+- **分类右键:重命名 + 删除**。删除**只动树**(索引里的归属),磁盘上一个文件都不碰:
+  「笔记移到上级分类」或「笔记留为未归类」。二级菜单本身就是二次动作,不再弹窗确认。
+- **扫描范围接受绝对路径**:Host 侧换算成工作区相对,并拒绝工作区**外**的目录
+  (否则"多看一个目录"就变成越界读用户主目录)。
+
+### 存储:索引改记**相对路径**
+
+`<工作区>/.dsh-notes/index.json` 里,笔记与笔记根从绝对路径改成**工作区相对**
+(`notes[].rel` / `workspaces[].notesRootRel`);只有 `workspace.root` 保持绝对 —— 它是锚点,
+也是工作区键的来源。
+
+- **为什么**:这个文件就躺在工作区里,它记的每一篇笔记必然在工作区内,记绝对路径等于把
+  "这台机器的盘符和目录名"抄进用户数据。v0.3.0 的搬迁能力其实是靠装载时那一趟
+  `rebasePath` 硬扳回来的;改成相对之后**搬迁 = 零操作**(同一个文件在新根下直接就是对的),
+  文件也不再泄漏机器路径。
+- **迁移**:旧文件(绝对 `path`)装载时自动补出 `rel`,下次落盘即迁移完;键与 `root` 的认领逻辑不变。
+- **例外**:`storeScope: 'home'`(机器本地一份整体索引,里面装着多个工作区与跨工作区映射)
+  仍然用绝对路径 —— 那里只有绝对路径说得清"是哪个文件"。
+- 一处刻意的区分:`notesRootOverrideRel` 用 `'.'` 表示"显式设成工作区根",因为 `''` 在
+  这个字段上的含义是"**没设过**";不区分的话往返一趟就丢(用户显式选过的笔记根会变回默认)。
+
+### 工程
+
+- 单测 184 → **228** 条;`node scripts/build-graph.mjs` cycles 0。
+- 新增 `src/client/scan-sort.ts`(排序纯逻辑)、`src/client/browse-path.ts`(目录浏览器纯逻辑)、
+  `src/client/DirPicker.tsx`;`lib/notes.js` 新增 `mtimeOfVersion` / `detectEol` / `applyEol` /
+  `normalizeEol` / `relativeToWorkspace`;`lib/store.js` 新增 `relativizeState`。
+- **Host 半热重载打通**(本轮实测,profile 侧配置):给 `hmr` 行的 `root` 加上本插件的
+  `lib/` 目录,改 Host 代码约 1 秒后自动热替换插件条目,**不用重启**;客户端半一直走
+  `dsh-client-hmr` 的 500ms bundle 轮询,改完 `npm run build` 已打开的页面**自动换新**(不用刷)。
+  两个坑都写进了 profile 注释:
+  1. `root` 只能给**很小的子目录**。给插件根会让 chokidar(默认无限递归 + 跟随软链)把整个工作区
+     递归进去 —— 实测 6530 个 inotify watch 且持续增长、永不 ready,把 WSL 的 drvfs/9p 打满,
+     表现是**端口在听但永不应答**(systemd 还显示 active)。只给 `lib/` 是 13 个 watch。
+  2. **WSL 的 inotify 看不见 `/mnt/d`(drvfs)**:独立进程实测,改 ext4(`/tmp`、`/home`)能收到
+     `change`,改 `/mnt/d/...` 收不到**任何**事件。所以必须开 `usePolling`
+     (chokidar 选项能经 config 透传:`schemastery` 会保留未声明的键,不用给
+     `@deepseek-ai/dsh-hmr` 打补丁);`interval: 1000`,实测代价 **+0.5% 单核**。
+
 ## v0.3.0 — 插件数据跟着工作区走(2026-10-01)
 
 **破坏性存储变更,带自动迁移。** 插件的**语义数据**(分类树、笔记归属、忽略规则、置顶、

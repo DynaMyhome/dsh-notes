@@ -2,15 +2,20 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  applyEol,
   assetFileName,
+  detectEol,
   dirOf,
   isAbsolutePath,
   looksLikeMarkdown,
   mintFrontmatter,
+  mtimeOfVersion,
+  normalizeEol,
   normalizePath,
   parseWikiLinks,
   readNoteId,
   relativePath,
+  relativeToWorkspace,
   sanitizeFileName,
   titleOf,
   workspaceKeyOf,
@@ -105,4 +110,53 @@ test('assetFileName: 时间 + 随机 + 后缀兜底', () => {
   const name = assetFileName('.PNG', Date.UTC(2026, 8, 30, 1, 2, 3))
   assert.match(name, /^image-20260930-010203-[0-9a-f]{6}\.png$/)
   assert.match(assetFileName('.exe', 0), /\.png$/)
+})
+
+test('mtimeOfVersion: 真 provider 的 5 段 token 要解析成毫秒', () => {
+  // 形状来自 @deepseek-ai/dsh-fs-local 的 versionOf():
+  //   `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}`
+  // 单测里必须用**真形状**,否则"测试替身与运行时不同构":
+  // 旧代码 `Number(version) || 0` 在替身(纯 mtimeMs)上work,在真 provider 上恒为 0,
+  // 于是"最近"排序在线上悄悄退化成按路径排,而单测永远是绿的。
+  assert.equal(
+    mtimeOfVersion('2050:1234567:98765:1790844019593000000:1790844019593000000'),
+    1790844019593,
+  )
+  // 单段纯数字:部分 provider / 测试替身直接给毫秒
+  assert.equal(mtimeOfVersion('1790844019593'), 1790844019593)
+  // 认不出来一律 0(调用方回落成路径序),绝不瞎猜
+  assert.equal(mtimeOfVersion('v1'), 0)
+  assert.equal(mtimeOfVersion('a:b:c:d:e'), 0)
+  assert.equal(mtimeOfVersion('1:2:3:abc:5'), 0)
+  assert.equal(mtimeOfVersion('1:2:3:4'), 0)
+  assert.equal(mtimeOfVersion(''), 0)
+  assert.equal(mtimeOfVersion(undefined), 0)
+  assert.equal(mtimeOfVersion(null), 0)
+})
+
+test('detectEol / applyEol / normalizeEol: 保住原文件的行尾', () => {
+  assert.equal(detectEol('a\r\nb\r\nc'), 'CRLF')
+  assert.equal(detectEol('a\nb\nc'), 'LF')
+  assert.equal(detectEol(''), 'LF')
+  assert.equal(detectEol('a\nb\r\n'), 'LF', '一半一半时算 LF(与 fs-local 同规则)')
+
+  assert.equal(applyEol('a\nb\n', 'CRLF'), 'a\r\nb\r\n')
+  assert.equal(applyEol('a\nb\n', 'LF'), 'a\nb\n')
+  // 已经是 CRLF 的输入不能被加成 \r\r\n
+  assert.equal(applyEol('a\r\nb\r\n', 'CRLF'), 'a\r\nb\r\n')
+  assert.equal(normalizeEol('a\r\nb\r\n'), 'a\nb\n')
+  // 孤立的 \r 不动(与 fs-local 同规则)
+  assert.equal(normalizeEol('a\rb\r\n'), 'a\rb\n')
+})
+
+test('relativeToWorkspace: 绝对 → 工作区相对(越界即拒)', () => {
+  assert.deepEqual(relativeToWorkspace('/ws', '/ws'), { ok: true, rel: '' })
+  assert.deepEqual(relativeToWorkspace('/ws', '/ws/a/b'), { ok: true, rel: 'a/b' })
+  assert.deepEqual(relativeToWorkspace('/ws', '/ws/a/b/'), { ok: true, rel: 'a/b' })
+  assert.deepEqual(relativeToWorkspace('/ws', '/wsx/a'), { ok: false }, '前缀相同但不是子目录')
+  assert.deepEqual(relativeToWorkspace('/ws', '/home/phyd'), { ok: false })
+  assert.deepEqual(relativeToWorkspace('', '/ws/a'), { ok: false })
+  // Windows 盘符:大小写不敏感
+  assert.deepEqual(relativeToWorkspace('D:/Work', 'd:/work/notes'), { ok: true, rel: 'notes' })
+  assert.deepEqual(relativeToWorkspace('D:\\Work', 'D:/Work/notes'), { ok: true, rel: 'notes' })
 })
