@@ -15,8 +15,11 @@ import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 
 import { isSourceMode } from './mode'
+import { renderCell } from './cell-render'
 import { isDelimiterRow, parseTable, type TableModel } from './table-model'
 import { frontmatterEndOf } from './frontmatter'
+import { markdownLanguage } from '@codemirror/lang-markdown'
+import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
 import { jsxLanguage, tsxLanguage, javascript, javascriptLanguage, typescriptLanguage } from '@codemirror/lang-javascript'
 import { json, jsonLanguage } from '@codemirror/lang-json'
 import { python, pythonLanguage } from '@codemirror/lang-python'
@@ -24,6 +27,11 @@ import { highlightTree, tagHighlighter, tags as tokenTags } from '@lezer/highlig
 import temml from 'temml'
 
 /** 一个单元格:文本 + 它在**文档中的绝对范围**。 */
+/** 单元格里的行内 markdown 单独解析 —— 必须用**配置过自定义语法**的解析器
+ * (`[[双链]]` / `==高亮==` / `$公式$` 都是自研 lezer 节点,裸 parser 认不出来;
+ * 这是项目里踩过的第四条硬规则:单测与运行时都要用同一个 parser)。 */
+const parseCellMarkdown = (source: string): unknown => markdownLanguage.parser.configure(markdownSyntaxConfig()).parse(source)
+
 /** 当前打开的单元格输入框(切换单元格时用来避免互相抢焦点)。 */
 const openCellInputs = new Set<HTMLInputElement>()
 
@@ -140,12 +148,19 @@ class TableWidget extends WidgetType {
   constructor(
     readonly model: TableModel,
     readonly from: number,
+    /** 单元格里 `[[双链]]` 要上色,得知道哪些标题存在(与正文同一份)。 */
+    readonly knownTitles: () => Set<string> = () => new Set(),
   ) {
     super()
   }
 
   eq(other: TableWidget): boolean {
     return other.from === this.from && JSON.stringify(other.model) === JSON.stringify(this.model)
+  }
+
+  /** 一格的内容:走决策层渲染**行内** markdown(公式/加粗/行内码/高亮/双链…)。 */
+  private fillCell(host: HTMLTableCellElement, text: string): void {
+    host.appendChild(renderCell(text, parseCellMarkdown, this.knownTitles()))
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -226,7 +241,7 @@ class TableWidget extends WidgetType {
       const tr = document.createElement('tr')
       for (const cell of this.model.header) {
         const th = document.createElement('th')
-        th.textContent = cell.text
+        this.fillCell(th, cell.text)
         th.addEventListener('mousedown', editCell(cell))
         tr.appendChild(th)
       }
@@ -238,7 +253,7 @@ class TableWidget extends WidgetType {
       const tr = document.createElement('tr')
       for (const cell of row) {
         const td = document.createElement('td')
-        td.textContent = cell.text
+        this.fillCell(td, cell.text)
         td.addEventListener('mousedown', editCell(cell))
         tr.appendChild(td)
       }
@@ -276,6 +291,7 @@ export function buildTableDecorations(
   state: EditorState,
   sourceMode: boolean = isSourceMode(),
   strings: WidgetStrings = DEFAULT_WIDGET_STRINGS,
+  getKnownTitles: () => Set<string> = () => new Set(),
 ): DecorationSet {
   // 源码模式:不加任何块级装饰(按**这个编辑器**的模式,不再读全局单例 —— 两栏分屏时
   // 左边预览、右边源码是常态)
@@ -325,7 +341,7 @@ export function buildTableDecorations(
         const source = state.doc.sliceString(range.from, range.to)
         const model = parseTable(source, range.from)
         if (model.header.length === 0) return
-        ranges.push(Decoration.replace({ widget: new TableWidget(model, range.from), block: true }).range(range.from, range.to))
+        ranges.push(Decoration.replace({ widget: new TableWidget(model, range.from, getKnownTitles), block: true }).range(range.from, range.to))
         // 跳过该节点的子节点(表格内部不需要行内装饰)。注意:解析器的 Table 节点包含紧跟
         // 表格的那一行,所以那一行也拿不到行内装饰 —— 这是**已知未修**的问题,靶子见
         // test/markdown-render.test.mjs 的 skip 用例。此前我改成"不 return + 记录范围"，
@@ -548,9 +564,14 @@ class CodeCardWidget extends WidgetType {
  * @param strings - widget 文案(跟随界面语言)。
  * @returns 装饰集;构建失败时返回空集(宁可少渲染,不可卡死)。
  */
-function safeTableDecorations(state: EditorState, sourceMode: boolean, strings: WidgetStrings): DecorationSet {
+function safeTableDecorations(
+  state: EditorState,
+  sourceMode: boolean,
+  strings: WidgetStrings,
+  getKnownTitles: () => Set<string>,
+): DecorationSet {
   try {
-    return buildTableDecorations(state, sourceMode, strings)
+    return buildTableDecorations(state, sourceMode, strings, getKnownTitles)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('[dsh-notes] 块级装饰构建失败(本次跳过):', error)
@@ -558,14 +579,24 @@ function safeTableDecorations(state: EditorState, sourceMode: boolean, strings: 
   }
 }
 
-export function tableBlocks(sourceMode: boolean = isSourceMode(), strings: WidgetStrings = DEFAULT_WIDGET_STRINGS): Extension {
+export function tableBlocks(
+  sourceMode: boolean = isSourceMode(),
+  strings: WidgetStrings = DEFAULT_WIDGET_STRINGS,
+  /**
+   * 已知笔记标题(双链上色用)。
+   *
+   * 传**函数**而不是 Set:标题会随树变化,而 StateField 是建好就定了 ——
+   * 每次重建装饰时现取,才不会拿一份过期的标题表。
+   */
+  getKnownTitles: () => Set<string> = () => new Set(),
+): Extension {
   return StateField.define<DecorationSet>({
-    create: (state) => safeTableDecorations(state, sourceMode, strings),
+    create: (state) => safeTableDecorations(state, sourceMode, strings, getKnownTitles),
     // sourceMode 必须一并转发:早先这里漏了,于是任何一次改动都会按**模块级**默认值重建,
     // 两栏分屏时"源码栏被预览装饰覆盖"就是这么来的。
     update: (value, transaction) =>
       transaction.docChanged || transaction.selection !== undefined
-        ? safeTableDecorations(transaction.state, sourceMode, strings)
+        ? safeTableDecorations(transaction.state, sourceMode, strings, getKnownTitles)
         : value,
     provide: (field) => EditorView.decorations.from(field),
   })

@@ -27,6 +27,26 @@
   `restoreLineEndings`)。现在保存前采样文件头判断行尾并按原风格写回;
   `FS_STALE_VERSION` 交出去的 `currentText` 也归一成 LF —— 否则 CRLF 笔记上
   "磁盘内容 == 我正要写的内容"那条自愈分支永远不成立,会误报外部修改。
+- **超过 64KB 的笔记根本存不下去** —— 路由的 JSON 请求体上限是 64KB,而 `save` 走的正是它:
+  用户那篇 123,530 字节的笔记每次保存都被挡住,界面只显示「**Save failed**」,
+  真正的原因(`请求体过大`)藏在响应里。上限提到 8MB(本地同源路由、自带鉴权,
+  笔记是纯文本;资产那条本来就是 16MB)。靶子用例:一条 >128KB 的 body 必须 200。
+- **表格里的 markdown 完全没渲染** —— 单元格以前是 `td.textContent = cell.text`,
+  于是 `**加粗**`、`$公式$`、`==高亮==`、`` `代码` ``、`[[双链]]` 在表格里全是**原文**。
+  现在每格单独跑**决策层**再落成 DOM(见 `editor/cell-inline.ts` / `cell-render.ts`)——
+  规则不在第二处重写,"该藏还是该露"仍然只有决策层说了算。公式走 Temml(与正文同一个渲染器)。
+- **表格列一多就把整篇顶宽**(分屏时正文也得左右拖) —— 两个原因是叠加的:
+  ① 单元格里的长文本不换行,把列撑到几千像素;
+  ② **`.cm-content` 是 CM6 的 flex item**(`flex-grow:2; flex-shrink:0`),
+  它的 `min-width:auto` 等于**min-content 宽度** —— 宽表格的 min-content 把内容区撑到比滚动区还宽
+  (实测:滚动区 384px、内容区 687px),于是**连正文都在 687px 上换行**。
+  修法:**表格自己滚**(外壳 `overflow-x:auto; max-width:100%`)+
+  **内容区 `min-width:0`**(让正文老老实实等于滚动区宽度)+ 单元格换行。
+  现在照 Typora:正文一律自适应、**没有横向滚动条**;只有表格在列多时出横向滚动条。
+- **渲染出来的图片不跟着横向宽度自适应** —— `inline-flex` 外壳的宽度是由图片本身决定的,
+  子元素再写 `max-width:100%` 只是"相对自己"的空转,一张 2000px 宽的图照样把正文顶宽。
+  现在外壳也带 `max-width:100%`(百分比相对**行/内容区**解析,这才是真约束),
+  图片 `max-width:100% + height:auto`(只缩不放、保持长宽比)。
 
 ### 新增
 
@@ -60,9 +80,10 @@
 
 ### 工程
 
-- 单测 184 → **228** 条;`node scripts/build-graph.mjs` cycles 0。
+- 单测 184 → **238** 条;`node scripts/build-graph.mjs` cycles 0。
 - 新增 `src/client/scan-sort.ts`(排序纯逻辑)、`src/client/browse-path.ts`(目录浏览器纯逻辑)、
-  `src/client/DirPicker.tsx`;`lib/notes.js` 新增 `mtimeOfVersion` / `detectEol` / `applyEol` /
+  `src/client/DirPicker.tsx`;`src/client/editor/cell-inline.ts`(单元格行内**节点模型**,纯函数)、
+  `cell-render.ts`(落成 DOM);`lib/notes.js` 新增 `mtimeOfVersion` / `detectEol` / `applyEol` /
   `normalizeEol` / `relativeToWorkspace`;`lib/store.js` 新增 `relativizeState`。
 - **Host 半热重载打通**(本轮实测,profile 侧配置):给 `hmr` 行的 `root` 加上本插件的
   `lib/` 目录,改 Host 代码约 1 秒后自动热替换插件条目,**不用重启**;客户端半一直走

@@ -147,6 +147,49 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
    `markdownLanguage.parser.configure(markdownSyntaxConfig())`;裸 `markdownLanguage.parser`
    没有自定义行内语法,`[[x]]` 会被解析成普通 `Link`,靶子用例永远是红的。
 
+### 横向宽度:正文永不横滚,表格自己滚(改宽度相关前先读)
+
+用户口径(照 Typora):**正文必须自适应换行、不许有横向滚动条;只有表格在列多时才横滚。**
+
+三条一起才成立,少一条就会"整篇都要左右拖"(2026-10-01 实测:滚动区 384px、内容区被撑到 687px):
+
+1. `.cm-content { min-width: 0 }` —— **最关键的一条**。CM6 把 `.cm-content` 做成
+   `.cm-scroller`(display:flex)里的 flex item(`flex-grow:2; flex-shrink:0`),而 flex item 的
+   `min-width:auto` 等于它的 **min-content 宽度**:表格一宽就把内容区撑得比滚动区还宽,
+   于是**正文也跟着在更宽的宽度上换行**,整篇都得左右拖。`min-width:0` 让内容区恒等于滚动区宽度。
+2. `.dsh-cm-table-wrap { max-width:100%; overflow-x:auto }` + 表格 `width:max-content; min-width:100%`
+   —— 窄表格仍铺满(照 Typora),宽表格由**外壳**滚。少了 `max-width:100%` 就会去顶 `.cm-content`。
+3. `.cm-content { overflow-wrap:anywhere }` + `.cm-scroller { overflow-x:hidden }` ——
+   长到没有空格的串(URL、`/mnt/<盘>/...` 路径、长公式)默认**不换行**;这一条是兜底,
+   保证正文侧永远没有横向滚动条。
+
+配套两条:
+
+- **单元格**要 `white-space:normal; overflow-wrap:anywhere; max-width:32em`,否则一格长文本
+  能把那一列拉到几千像素。
+- **图片**必须两级都约束:外壳 `max-width:100%`(百分比相对**行/内容区**解析,这才是真约束)
+  + `img { max-width:100%; height:auto; object-fit:contain }`。只写图片那一级是**空转** ——
+  `inline-flex` 外壳的宽度本来就是由图片决定的,一张 2000px 宽的图照样把正文顶宽(用户实测)。
+
+### 表格单元格里的行内 markdown
+
+单元格以前是 `td.textContent = cell.text`,于是表格里的 `**加粗**`、`$公式$`、`==高亮==`
+全是原文(用户实测"表格里面没法渲染")。现在每格走**同一套决策层**:
+
+- `editor/cell-inline.ts` 是**纯函数**(无 DOM / 无 Temml,所以能进 `node --test`):
+  把决策层给的**扁平区间**(mark/hide/widget)折成**嵌套节点树** —— `**粗体里的 `代码`**`
+  是 MARK 套 MARK + 两个 HIDE。
+- `editor/cell-render.ts` 落成 DOM:公式走 Temml(与正文同一个渲染器、同一套 CSS);
+  **认不出来的 widget 一律退回原文**,绝不吞内容。
+- `MARK_CLASS` 必须与 `decorate.ts` / `setup.ts` 的 theme 一致,否则"正文里的加粗是粗的、
+  表格里的不是"。
+- 单元格单独解析(`tableBlocks` 里的 `parseCellMarkdown`),**必须用配置过自定义语法的 parser**,
+  否则 `[[x]]` / `==x==` / `$x$` 根本不会变成节点(第四条硬规则)。
+- 就地编辑不受影响:输入框仍然吃 `cell.text` 原文,渲染只是"底下那一层"。
+- ⚠️ **绝不要往活的 `.cm-content` 里塞测试节点**:CM6 的 MutationObserver 会把 DOM 变更
+  当成**真实的编辑**读回文档(实测:塞一个 `test` 节点 = 文档多 12 个字符并触发自动保存)。
+  要量 CSS 就把测试节点挂到 **`.cm-scroller`**(它不在 contenteditable 里)或干脆用离线页面。
+
 ## 身份、标题与多文档
 
 - **标题 = 文件名**(Obsidian 模型)。正文里的 H1 只是正文,`[[链接]]` 也按文件名解析。
@@ -263,6 +306,11 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 - **点击落点**(2026-10-01 修):**软换行**的长段落里点哪一行就落在哪一行
   (以前"不管怎么点光标都在行首",见 `editor/click-hit.ts`);单视觉行仍走浏览器原生文本命中。
 - **表内右键**(2026-10-01 修):删/插行落在**右键那一行**(以前首行删不掉、其余删的是上一行)。
+- **表格里的 markdown 会渲染 + 正文永不横滚**(v0.4.0):单元格也走决策层(公式/加粗/行内码/
+  高亮/双链都渲染);列多时**只有表格**出横向滚动条,正文一律自适应换行(照 Typora);
+  渲染出来的图片跟着行宽缩放、保持长宽比。细节与三条必须同时成立的条件见「横向宽度」那节。
+- **大笔记能存了**(v0.4.0 修):路由的 JSON 体上限原来是 64KB,而保存正文走的正是它 ——
+  用户那篇 123KB 的笔记每次保存都只显示「Save failed」。上限提到 8MB。
 - **改名/新建**(2026-10-01 修):改名后标签标题与路径跟着变、继续编辑能正常保存(以前保存报
   NOT_FOUND);树工具栏 ＋ 建了笔记会**自动打开**(以前不打开)。
 - **浮层材质 + 文案**(2026-10-01 修):模态面板/菜单/弹层用宿主菜单材质(不再半透明穿透);
@@ -314,7 +362,9 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | `src/client/ContextMenu.tsx` | 共享右键菜单(分组 + 二级菜单 + 视口夹取) |
 | `src/client/editor/setup.ts` | CM6 装配:主题、键位、输入规则、点击命中、工具栏命令、**widget 文案(`strings` 转发)** |
 | `src/client/editor/decorate.ts` | 行内装饰 ViewPlugin(`safeBuild` 兜底) |
-| `src/client/editor/table.ts` | 块级 StateField(chip / 表格 / 代码卡 / 公式)+ `tableTab` |
+| `src/client/editor/table.ts` | 块级 StateField(chip / 表格 / 代码卡 / 公式)+ `tableTab`;**单元格用决策层渲染行内 markdown** |
+| `src/client/editor/cell-inline.ts` | 单元格的**行内节点模型**(纯函数:扁平区间 → 嵌套树),单测 `test/cell-inline.test.mjs` |
+| `src/client/editor/cell-render.ts` | 节点树 → DOM(公式走 Temml;认不出的 widget 退回原文) |
 | `src/client/editor/selection.ts` | 选区包裹的纯逻辑(**必须用 `EditorSelection.range`**) |
 | `src/client/editor/table-model.ts` / `blocks.ts` / `reference.ts` | 纯模型:表格解析 / **表内插删行列(`applyTableAction`)** / 块级插入规划 / 引用载荷 |
 | `src/client/editor/media.ts` | 媒体地址工具(单独成模块是为打断 `decorate ⇄ setup` 循环依赖) |
@@ -326,7 +376,7 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
 | `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
-| `test/` | `node --test` 单测(**228 条**):含 `store`(存储纯函数 + **相对路径往返/搬迁**)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`service-scan-time`(**真 version token** 的时间排序)、`service-save-eol`(**行尾保真**)、`service-scan-roots`(扫描根的边界)、`browse-path` / `scan-sort` / `frontmatter`(CRLF 坐标) / `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫) |
+| `test/` | `node --test` 单测(**238 条**):含 `store`(存储纯函数 + **相对路径往返/搬迁**)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`service-scan-time`(**真 version token** 的时间排序)、`service-save-eol`(**行尾保真**)、`service-scan-roots`(扫描根的边界)、`browse-path` / `scan-sort` / `frontmatter`(CRLF 坐标) / `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫) |
 
 ## 开发与验证
 
