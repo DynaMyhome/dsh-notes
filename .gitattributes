@@ -1,0 +1,28 @@
+# Normalize every text file to LF in the repository, whatever the authoring OS.
+# The working tree lives on WSL and is served to DSH from /mnt/<盘> (drvfs); without
+# this, a CRLF working tree makes every file show as a full-file rewrite in
+# `git diff` and hides the real changes.
+* text=auto eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.svg text eol=lf
+*.sh text eol=lf
+# Windows driver scripts must keep CRLF to stay runnable by cmd.exe.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+# Binary assets are never touched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.exe binary
+*.zip binary

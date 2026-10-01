@@ -134,7 +134,7 @@ npm run setup && npm run build     # 首次需要 node_modules 符号链接,见 
 
 ## 状态
 
-P0–P4 全部落地,存储改造完成(`node --test test/*.test.mjs` **228** 条;开发与验证步骤见 `AGENTS.md`)。
+P0–P4 全部落地,存储改造完成(`node --test test/*.test.mjs` **238** 条;开发与验证步骤见 `AGENTS.md`)。
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
@@ -144,5 +144,83 @@ P0–P4 全部落地,存储改造完成(`node --test test/*.test.mjs` **228** �
 | P3 | 树操作(拖放/分类增删改/新建/快速打开/未归类整理)、大纲拖拽 | ✅ |
 | P4 | 跨工作区映射角标 / 图片粘贴 / `[[wikilink]]` / 代码卡片 / 真表格 / 公式 / 回收站 | ✅ |
 | v0.4.0 | 纳入管理**点选目录** + 排序(时间/名称/路径/大小)+ 分类**重命名/删除** + CRLF 笔记打不开与行尾保真的修复 + 索引改记**相对路径** | ✅ |
+| v0.5.0 | 卡片显示「笔记工作区」(locale 形状修正 + 删掉从不生效的 `package.json.meta`)、补 `LICENSE`/`.gitattributes`/`repository` 等 | ✅ |
 
 项目规则与硬不变量见 [`AGENTS.md`](AGENTS.md);本项目已启用 project-context 长期记忆(`.agent-context/`)。
+
+## 图标与显示元数据
+
+DSH 的 `设置 → 插件` 列表会给每个插件画一张卡片。卡片的图标与标题**不来自插件代码**,
+而是启动时由 `dsh-app-boot` 的 `readPluginMeta()`（`lib/index.js:1969`）从包资源里读的:
+
+| 来源 | 作用 |
+|---|---|
+| `package.json.icon` | 相对路径（必须在包目录内、≤256 KiB、支持 svg/png/jpg/webp）→ 读成 data URL 画成卡片图标 |
+| `locale/en.json`（锚点）+ `locale/zh.json` | **`{"meta":{"title":…,"description":…}}`**，随语言切换；需在 `exports` 暴露 `"./locale/*.json"` |
+
+三个坑（v0.5.0 之前三个全踩了）:
+
+1. **形状必须是 `meta.title` / `meta.description`**。写成根级 `title` / `description` 时
+   `dictionariesOf()` 读不到，标题会静默退回包名、描述退回 `package.json.description`
+   —— 而后者恰好是中文，于是"看起来本地化生效了"。
+2. **`package.json` 里没有 `meta` 这个字段**。`readPluginMeta()` 只读
+   `manifest.icon` / `manifest.name` / `manifest.description`；`manifest.meta` 在
+   **0.1.7-alpha.1 与 0.2.0-rc.2 两个 runtime** 里都没有任何消费者（已 grep 确认）。
+3. `icon` **不能**写绝对路径或 data URL（会抛错并把插件标成 `meta.error`）；
+   `locale/` 目录里**每个** `*.json` 都会被当成一种语言，别放别的 json。
+
+另：`exports` 必须暴露 `"./package.json"`，否则连 meta 都读不到。图标是**启动时**读取的，
+改完要重启 `dsh web` 才看得到。
+
+## 热重载（改完不用重启、不用刷新）
+
+本插件的开发目录就在工作区里（`/mnt/<盘>/.../dsh-notes`），profile 用 `link:` 指向它。
+前置两件事（一次性）:
+
+1. profile 里是 **`link:`** 挂载（当前 profile 已是）；
+2. profile 的 `cordis.patch.yml` 给 `hmr` 行开模块监听，并**只给 `lib/` 子目录**:
+
+   ```yaml
+   - id: hmr
+     disabled: false
+     config:
+       base: <插件目录的父目录>
+       root:
+         - '<你克隆 dsh-notes 的目录>/lib'
+       # ⚠️ WSL 的 inotify 看不见 /mnt/<盘>（drvfs），必须开轮询
+       usePolling: true
+       interval: 1000
+   ```
+
+之后:
+
+| 改了什么 | 生效方式 |
+|---|---|
+| `src/client/**` → `npm run build` 产出 `lib/client.js` | `@deepseek-ai/dsh-client-hmr` 每 500ms `stat` 一次 bundle，变了就推新 `rev` → 已打开的页面**就地换模块**，连 F5 都不用（代价：组件内部 state 会丢） |
+| `lib/*.js`（Host 半） | `dsh-hmr` 约 1 秒内重新导入并替换插件 fiber，**不用重启** |
+| `package.json` / `exports` / 新增依赖 / profile patch 结构 | 仍需重启 |
+
+**两个必须知道的边界**（都在 profile 注释里）:①`root` **只能给很小的子目录** ——
+给插件根会让 chokidar 递归整个工作区（实测 6530 个 watch 且持续增长、永不 ready，
+把 drvfs/9p 打满，表现是**端口在听但 HTTP 永不应答**）；只给 `lib/` 是 13 个 watch。
+②`/mnt/<盘>` 上必须 `usePolling`。
+
+## 兼容性
+
+- **DSH**：本插件的 peer 只有 `@deepseek-ai/cordis` 与 `@deepseek-ai/schemastery`，
+  **没有任何 `@deepseek-ai/dsh*` peer** —— 所以它不会被 DSH 0.2 的启动闸门
+  （`dsh-app-boot.evaluatePluginCompatibility()`，只校验名字以 `@deepseek-ai/dsh` 开头的 peer）
+  判为不兼容，也因此**从来不需要** `compatibility.json` 里的版本豁免。
+- **但内部接口面要复核**：本插件驱动的是 DSH 的**内部**服务（`fs` / `tools` / `sessions` /
+  `sandboxPolicy` / `sidebarRightTabs` / `slots` / locale）。
+  升级 DSH 后先跑 `npm test` 与 `node scripts/build-graph.mjs`，再按 `AGENTS.md`
+  的「事实来源」一节用 `cordis_inspect_*` 核对。
+- **`dsh.client.inject` 是客户端 fiber 的 `inject`，不是注释。**
+  `@deepseek-ai/dsh-client-modules` 会校验它，并把它用作 ①客户端模块图的到达前置、
+  ②客户端插件 fiber 的 `inject`（要等这些客户端服务就位才激活）。
+  所以**只列这个 bundle 真正必需的服务**：本插件是
+  `dsh-client-locale` / `dsh-client-ui-slots` / `dsh-client-ui-sidebar-right` 三项
+  （与 `lib/client.js` 自己的 `exports.inject` 一致）。
+  可选读取的服务（如 `uiWorkspace`）**绝不能**写进去，否则最小组合里整个插件起不来。
+- **平台**：Windows 与 WSL 都实跑过；`link:` 安装时 `node_modules` 必须是指向 profile
+  `node_modules` 的符号链接（见 `AGENTS.md`，**别在本目录跑 `npm install`**）。
