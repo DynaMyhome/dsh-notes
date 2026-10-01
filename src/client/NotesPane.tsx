@@ -947,7 +947,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const refreshTrash = useCallback(async () => {
     setTrashLoading(true)
     try {
-      const result = await fetchTrash()
+      const result = await fetchTrash(sessionId)
       setTrashEntries(result.entries)
       setTrashRoot(result.root)
     } catch (caught) {
@@ -1013,7 +1013,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       setBusy(true)
       void (async () => {
         try {
-          const result = await purgeTrash(entry === null ? null : entry.id, entry === null)
+          const result = await purgeTrash(sessionId, entry === null ? null : entry.id, entry === null)
           setStatus(t('status.purged').replace('{n}', String(result.removed)))
           await refreshTrash()
         } catch (caught) {

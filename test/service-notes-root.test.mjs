@@ -99,7 +99,7 @@ test('没有 notes/ 的工作区:笔记不会被当"文件没了"删掉,并标�
     const tree = await service.tree({ sessionId: 'session-1', force: true })
     assert.equal(tree.notesDirMissing, true, '要如实告诉界面"还没有笔记根"')
     assert.equal(tree.notes.some((item) => item.id === note.id), true, '工作区里的笔记必须还在')
-    assert.equal(service.registry.noteById(note.id) !== undefined, true, '索引条目不能被删')
+    assert.equal((await service.noteById(note.id)) !== undefined, true, '索引条目不能被删')
     assert.equal(tree.scanReport.incomplete, true, '这次扫描是不完整的')
   } finally {
     await cleanup(base, service)

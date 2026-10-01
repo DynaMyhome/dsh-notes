@@ -124,7 +124,7 @@ test('登记 notes/ 之外的 md:重扫之后仍在树里(回归:以前会被静
     // 越过冷却再取一次:以前这里会把 outside 的条目丢掉
     await new Promise((resolve) => setTimeout(resolve, 3100))
     tree = await service.tree({ sessionId: 'session-1', force: true })
-    assert.equal(service.registry.noteById(outside.id) !== undefined, true, '扫描范围之外的条目不能被"漏扫"判死')
+    assert.equal((await service.noteById(outside.id)) !== undefined, true, '扫描范围之外的条目不能被"漏扫"判死')
     assert.deepEqual(tree.notes.map((note) => note.relPath).sort(), ['docs/guide.md', 'notes/甲.md'])
   } finally {
     await cleanup(base, service)
@@ -171,7 +171,7 @@ test('改名/移动按 id 重绑,标题跟着新文件名;删除后条目消失'
     await rm(join(root, 'notes', 'sub', '甲改.md'))
     tree = await service.tree({ sessionId: 'session-1', force: true })
     assert.equal(tree.notes.some((item) => item.id === note.id), false, '原文件没了,条目要消失')
-    assert.equal(service.registry.noteById(note.id), undefined)
+    assert.equal(await service.noteById(note.id), undefined)
   } finally {
     await cleanup(base, service)
   }
@@ -358,7 +358,7 @@ test('删除/改名联动:候选消失、已纳入的按 id 重绑到新文件�
     await rm(join(root, 'docs', 'sub', '指南.md'))
     found = await classifyAll(service, { force: true })
     assert.equal(found.notes.some((item) => item.id === note.id), false, '原文件没了 → 条目消失')
-    assert.equal(service.registry.noteById(note.id), undefined)
+    assert.equal(await service.noteById(note.id), undefined)
   } finally {
     await cleanup(base, service)
   }
@@ -393,7 +393,7 @@ test('扫描范围:默认只有 notesDir;显式加根才看得见工作区其它
     // 默认:只扫 notes/
     const workspace = await service.workspaceOf('session-1')
     const byDefault = await service.classify(workspace.key, { force: true })
-    assert.deepEqual(service.scanRootsOf(service.registry.workspaceOf(workspace.key)), ['notes'])
+    assert.deepEqual(service.scanRootsOf(await service.workspaceNodeOf(workspace.key)), ['notes'])
     assert.equal(byDefault.candidates.some((file) => file.relPath.startsWith('docs/')), false)
     assert.equal(byDefault.stats.total, 1, '默认只看得到 notes/ 里的 md')
 

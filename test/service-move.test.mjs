@@ -42,6 +42,7 @@ async function setup() {
     notesDir: 'notes',
     assetsDir: '.dsh-assets',
     storeDir,
+    storeScope: 'home',
     unfiledDepth: 3,
     scanTtlMs: 8000,
     unfiledMax: 200,
@@ -50,7 +51,7 @@ async function setup() {
     watch: false,
   })
   const workspace = await service.workspaceOf('session-1')
-  const registry = await service.ensureLoaded()
+  const registry = await service.registryFor(workspace.key, { root: workspace.root, name: workspace.name })
   const mk = (title) => ({
     id: `n_${title}`,
     path: `/ws/notes/${title}.md`,
@@ -61,7 +62,7 @@ async function setup() {
   for (const title of ['A', 'B', 'D']) registry.addNote(mk(title))
   const collection = registry.createCollection(workspace.key, { name: 'C', parentId: null })
   const collectionId = collection?.id ?? Object.keys(registry.toJSON().workspaces[workspace.key].collections)[0]
-  await service.persist()
+  await service.persist(workspace.key)
   return { service, registry, workspace, collectionId, storeDir }
 }
 
