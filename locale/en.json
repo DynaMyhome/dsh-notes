@@ -1,4 +1,6 @@
 {
-  "title": "Notes Workspace",
-  "description": "A self-contained notes area in the right sidebar: a collapsible notes tree (collections / unfiled / cross-workspace links) beside a Markdown editor. Notes are ordinary .md files; the index is a thin mapping."
+  "meta": {
+    "title": "Notes workspace",
+    "description": "A self-contained notes area in the right sidebar: a collapsible notes tree (collections / unfiled / cross-workspace links) beside a Markdown editor. Notes are ordinary .md files; the index is a thin mapping."
+  }
 }

@@ -3,6 +3,56 @@
 本插件按 [语义化版本](https://semver.org/lang/zh-CN/) 打 tag;`v0.2.0` 是**首个带 tag 的发布**
 (0.1.0 是开发期的初始版本,当时没有打 tag,仓库里也没有 release)。
 
+## v0.5.0 — 插件卡片终于显示「笔记工作区」/ 删掉从不生效的 meta 字段 / 补齐许可证与规范化(2026-10-01)
+
+### 修
+
+- **`设置 → 插件` 卡片标题一直显示包名 `dsh-notes`,本地化从未生效。**
+  根因是两处形状都不对:
+  - `package.json` 里的 `meta: {title, description}` **根本不是 DSH 读的字段** ——
+    `dsh-app-boot` 的 `readPluginMeta()`（`lib/index.js:1969`）只读 `manifest.icon` /
+    `manifest.name` / `manifest.description` 与 `locale/<lang>.json`；已在 **0.1.7-alpha.1 与
+    0.2.0-rc.2 两个 runtime** 里 grep 确认没有任何代码读 `manifest.meta`。
+  - `locale/{en,zh}.json` 写成了**根级** `title` / `description`，而读取端（`dictionariesOf()`）
+    读的是 **`parsed.meta.title` / `parsed.meta.description`** —— 于是整个字典被当成"没有 title"，
+    标题退回 `manifest.name`（包名），描述退回 `manifest.description`（中文描述就这样"看起来是对的"，
+    掩盖了问题）。
+  修法：locale 两份改成规范形状 `{"meta":{"title","description"}}`；**删除 `package.json.meta`**
+  （内容已搬进 locale，不留一个从来没人读的字段误导后来人）。
+
+### 变更
+
+- **补 `license` / `repository` / `homepage` / `bugs` 字段**与 **`LICENSE` 正文**（MIT © 2026 Phy-D）：
+  此前 `package.json` 既没有 `license` 字段、仓库里也没有许可证正文。
+- **新增 `.gitattributes`**（`* text=auto eol=lf` + 二进制保护）：本插件的开发目录在
+  `/mnt/d/...`，工作树被 Windows 侧工具改成 CRLF 时，`git diff` 会整文件重写、真实改动被淹没
+  （`dsh-restart-manager` 上实测过 719 增 / 719 删而真实差异为 0）。
+- `files` 白名单：`locale` → `locale/*.json`（与其他插件一致），补 `LICENSE`。
+- 版本 `0.4.0` → `0.5.0`。`private: true` **保留**（只挡 `npm publish`，不影响 `git`/`link:` 安装，
+  本项目也从不走 npm 发布）。
+
+### 文档更正（重要，与本插件代码无关但会误导人）
+
+- **`dsh.client.inject` 不是"信息性字段"。** 早先 README 沿用了 `dsh-device-center` 的说法
+  （"框架不校验"），**那是错的**：`@deepseek-ai/dsh-client-modules` 会校验它
+  （`optionalStringArray(pkgName, "dsh.client.inject", decl.inject)`），并把它同时用作
+  ①客户端模块图的**到达前置**（`arriveGraphRow` 先 `await` 完 `row.inject` 里的依赖）与
+  ②客户端插件 fiber 的 `inject`（即**要等这些客户端服务就位才激活**）。
+  所以这份清单必须**只列这个 bundle 真正必需的服务**；凡是"有就读、没有就算了"的可选服务
+  （本插件的 `uiWorkspace` 就是）**绝不能写进去**，否则最小组合里整个插件起不来 ——
+  这正是 `AGENTS.md`「服务经 `ctx.get('uiWorkspace')` 可选读取（不写进 `dsh.client.inject`）」
+  那条注释的由来。本插件现有三项
+  （`dsh-client-locale` / `dsh-client-ui-slots` / `dsh-client-ui-sidebar-right`）
+  恰好等于 `lib/client.js` 自己的 `exports.inject`，**保持不变**。
+
+### 实测
+
+- `设置 → 插件` 卡片显示「笔记工作区 / Notes workspace」与自有图标（此前是包名 + 通用占位图标）。
+- 客户端槽位实地核对：`cordis_inspect_query`(client `Slots`, root `sidebar.right.pane.tab`)
+  的 occupants 里 `dsh-notes` **`active: true`**。
+- 宿主半实地核对：`/dsh-notes/tree` 返回 **401**（路由在、自建鉴权拦下；未知路径是 404）。
+- `npm test`（238 条）与 `node scripts/build-graph.mjs`（cycles: 0）保持全绿。
+
 ## v0.4.0 — 可点选目录 / 排序与时间修正 / 分类可改名可删除 / CRLF 笔记打不开 / 索引改记相对路径(2026-10-01)
 
 ### 修
