@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   STORE_DIRNAME,
+  isEmptySlice,
   STORE_FILENAME,
   STORE_GITIGNORE,
   adoptWorkspaceKey,
@@ -138,6 +139,28 @@ test('已知根表:从旧整体索引提取、增删、容错', () => {
   assert.deepEqual(Object.keys(messy.workspaces), ['ok'], '没有 root 的条目丢掉;lastUsedAt 非法归零')
   assert.equal(messy.workspaces.ok.lastUsedAt, 0)
   assert.deepEqual(normalizeRoots(null), emptyRoots())
+})
+
+test('isEmptySlice:空切片不落盘(用户只是看了一眼的工作区不该多出点目录)', () => {
+  const empty = { schemaVersion: 1, notes: {}, workspaces: { k1: { root: '/r', name: 'x', notesRoot: '/r/notes', collections: {}, refs: {}, pins: [], recent: [], ignored: [], ignoredGlobs: [], scanRoots: [], notesRootOverride: '' } } }
+  assert.equal(isEmptySlice(empty), true)
+  assert.equal(isEmptySlice({ schemaVersion: 1, notes: {}, workspaces: {} }), true)
+  assert.equal(isEmptySlice({ schemaVersion: 1, notes: { n_a: { id: 'n_a' } }, workspaces: empty.workspaces }), false, '有笔记 → 要写')
+  const withCollection = structuredClone(empty)
+  withCollection.workspaces.k1.collections = { c1: { id: 'c1', name: '组', parentId: null, order: 1 } }
+  assert.equal(isEmptySlice(withCollection), false, '建了分类 → 要写')
+  const withIgnored = structuredClone(empty)
+  withIgnored.workspaces.k1.ignored = ['x.md']
+  assert.equal(isEmptySlice(withIgnored), false, '标了忽略 → 要写')
+  const withRoots = structuredClone(empty)
+  withRoots.workspaces.k1.scanRoots = ['']
+  assert.equal(isEmptySlice(withRoots), false, '改了扫描范围 → 要写')
+  const withOverride = structuredClone(empty)
+  withOverride.workspaces.k1.notesRootOverride = '/r/docs'
+  assert.equal(isEmptySlice(withOverride), false, '换了笔记根 → 要写')
+  const withPin = structuredClone(empty)
+  withPin.workspaces.k1.pins = ['n_a']
+  assert.equal(isEmptySlice(withPin), false, '有置顶 → 要写')
 })
 
 test('mergeSlice / pluckWorkspace:home ⇄ workspace 双向搬运', () => {
