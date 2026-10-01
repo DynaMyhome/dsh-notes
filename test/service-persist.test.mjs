@@ -5,15 +5,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { NoteService } from '../lib/service.js'
+import { workspaceKeyOf } from '../lib/notes.js'
 
 /**
- * 索引落盘的两条硬要求(用户审计里的一条是高危):
+ * 落盘语义(审计里的高危条目 + 存储改造后的新形态):
  *
- *   1. **内容没变就不写**。对账每 8s 后台跑一次(TTL),旧实现无条件 `persist()` ——
+ *   1. **内容没变就不写**。对账每 8s 后台跑一次(TTL),旧实现无条件落盘 ——
  *      本机实测 `registry.json` 每 ~8.4s 整份重写一次(tmp + rename),零变化也写。
  *   2. **一次失败不能毒化后续**。旧实现 `this.persistChain = this.persistChain.then(...)`,
  *      写失败后链变成 rejected,后面每次 `.then` 都被跳过 → 索引从此只活在内存里,
  *      重启即丢,而且**没有任何提示**。
+ *   3. 默认(`storeScope: 'workspace'`)写进**工作区自己的** `<root>/.dsh-notes/index.json`,
+ *      并顺手放一个 `.gitignore`(`*`)让插件数据不进用户的 `git status`;
+ *      `storeScope: 'home'` 则完全等价旧行为(整份写 `storeDir/registry.json`)。
  */
 
 /** 最小 ctx:不需要真文件系统(这一组只测落盘)。 */
@@ -36,7 +40,7 @@ function stubContext(root) {
   }
 }
 
-async function setup() {
+async function setup(options = {}) {
   const base = await mkdtemp(join(tmpdir(), 'dsh-notes-persist-'))
   const root = join(base, 'ws')
   await mkdir(root, { recursive: true })
@@ -47,9 +51,22 @@ async function setup() {
     storeDir: store,
     scanTtlMs: 8000,
     unfiledMax: 200,
+    ...options,
   })
-  await service.ensureLoaded()
-  return { base, service, store, file: join(store, 'registry.json') }
+  const workspace = await service.workspaceOf('session-1')
+  const registry = await service.registryFor(workspace.key, { root: workspace.root, name: workspace.name })
+  return {
+    base,
+    root,
+    service,
+    store,
+    workspace,
+    registry,
+    /** 工作区形态下的索引文件 */
+    file: join(root, '.dsh-notes', 'index.json'),
+    /** 旧的整体索引文件 */
+    homeFile: join(store, 'registry.json'),
+  }
 }
 
 const exists = async (path) => {
@@ -60,84 +77,116 @@ const exists = async (path) => {
   }
 }
 
-test('persist:内容没变时不重写(消掉每 8s 的整份重写)', async () => {
-  const { base, service, file } = await setup()
+test('workspace 形态:索引落在工作区里,且放了一个自忽略的 .gitignore', async () => {
+  const { base, service, workspace, registry, root, homeFile } = await setup()
   try {
-    service.registry.workspace('ws-A', { name: 'A', root: '/tmp/A', notesRoot: '/tmp/A/notes' })
-    await service.persist()
+    registry.workspace(workspace.key, { name: 'ws' })
+    registry.addNote({ id: 'n_a', path: join(root, 'notes', 'a.md'), workspaceKey: workspace.key, title: 'a' })
+    await service.persist(workspace.key)
+
+    const saved = JSON.parse(await readFile(join(root, '.dsh-notes', 'index.json'), 'utf8'))
+    assert.deepEqual(Object.keys(saved.notes), ['n_a'])
+    assert.deepEqual(Object.keys(saved.workspaces), [workspace.key], '工作区文件里只有这一个工作区')
+    assert.equal(await exists(homeFile), null, '语义数据不该再写进 $DSH_HOME/knowledge')
+    assert.equal((await readFile(join(root, '.dsh-notes', '.gitignore'), 'utf8')).trim(), '*', '插件数据不能污染 git status')
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+test('workspace 形态:内容没变就不重写(inode/mtime 都不动)', async () => {
+  const { base, service, workspace, registry, file } = await setup()
+  try {
+    registry.workspace(workspace.key, { name: 'ws' })
+    await service.persist(workspace.key)
     const first = await exists(file)
     assert.notEqual(first, null, '第一次必须真的落盘')
 
-    // 再落两次:内容没变 → 不该动文件(inode/mtime 都不变)
     await new Promise((resolve) => setTimeout(resolve, 20))
-    await service.persist()
-    await service.persist()
+    await service.persist(workspace.key)
+    await service.persist(workspace.key)
     const second = await exists(file)
     assert.equal(second.ino, first.ino, 'inode 变了说明文件被重写了')
     assert.equal(second.mtimeMs, first.mtimeMs, 'mtime 变了说明文件被重写了')
 
-    // 真变了才写
-    service.registry.workspace('ws-B', { name: 'B', root: '/tmp/B', notesRoot: '/tmp/B/notes' })
-    await service.persist()
+    registry.workspace(workspace.key, { name: 'ws2' })
+    await service.persist(workspace.key)
     const third = await exists(file)
     assert.notEqual(third.mtimeMs, first.mtimeMs, '内容变了必须落盘')
-    const saved = JSON.parse(await readFile(file, 'utf8'))
-    assert.equal(Object.keys(saved.workspaces).includes('ws-B'), true, '新状态要写进去')
   } finally {
     await rm(base, { recursive: true, force: true })
   }
 })
 
-test('workspaceOf:同一会话重复读**不**刷新 lastUsedAt(否则索引每 8s 变一次)', async () => {
-  const { base, service } = await setup()
+test('workspace 形态:一次写失败之后,后续落盘仍然有效(链不会中毒)', async () => {
+  const { base, service, workspace, registry, root } = await setup()
   try {
-    service.registry.workspace('ws-A', { name: 'A', root: '/tmp/A', notesRoot: '/tmp/A/notes' })
-    service.registry.workspace('ws-B', { name: 'B', root: '/tmp/B', notesRoot: '/tmp/B/notes' })
-    const first = await service.workspaceOf('session-1', 'ws-A')
-    const stamp = first.node.lastUsedAt
-    assert.equal(typeof stamp, 'number')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 4s 轮询就是不停地用同一个 key 读 —— 不能刷新时间戳
-    await service.workspaceOf('session-1', 'ws-A')
-    await service.workspaceOf('session-1', 'ws-A')
-    assert.equal(service.registry.workspaceOf('ws-A').lastUsedAt, stamp, '重复读不该改 lastUsedAt')
-    // 真换了工作区才更新
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    const switched = await service.workspaceOf('session-1', 'ws-B')
-    assert.notEqual(switched.node.lastUsedAt, stamp, '换工作区要更新 lastUsedAt')
-    // 另一个会话选同一个工作区 → 也算一次使用(它是"这个会话"的选择)
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    const other = await service.workspaceOf('session-2', 'ws-A')
-    assert.notEqual(other.node.lastUsedAt, stamp, '别的会话选它也算一次使用')
+    // 把 `.dsh-notes` 建成**文件**:mkdir 会 EEXIST → 这一次写必然失败
+    await writeFile(join(root, '.dsh-notes'), 'x', 'utf8')
+    registry.workspace(workspace.key, { name: 'ws' })
+    // 允许 reject(调用方该知道没落盘),关键是**不能毒化链**
+    await service.persist(workspace.key).catch(() => {})
+    await service.persist(workspace.key).catch(() => {})
+
+    // 挪开障碍:如果链被毒化,这一次会被跳过 → 文件不存在
+    await rm(join(root, '.dsh-notes'), { force: true })
+    registry.addNote({ id: 'n_b', path: join(root, 'notes', 'b.md'), workspaceKey: workspace.key, title: 'b' })
+    await service.persist(workspace.key)
+    const saved = JSON.parse(await readFile(join(root, '.dsh-notes', 'index.json'), 'utf8'))
+    assert.deepEqual(Object.keys(saved.notes), ['n_b'], '失败过之后必须还能落盘(链没中毒)')
   } finally {
     await rm(base, { recursive: true, force: true })
   }
 })
 
-test('persist:一次写失败之后,后续落盘仍然有效(链不会中毒)', async () => {
-  const { base, service, file } = await setup()
+test('home 形态:完全等价旧行为(整份写 storeDir/registry.json)', async () => {
+  const { base, service, workspace, registry, root, homeFile } = await setup({ storeScope: 'home' })
   try {
-    const good = service.storeFile()
-    // 让 storeFile() 指到一个"必失败"的位置:父路径是个**文件**,mkdir 会 ENOTDIR
-    const blocker = join(base, 'blocker')
-    await writeFile(blocker, 'x', 'utf8')
-    service.config.storeDir = blocker
+    registry.workspace(workspace.key, { name: 'ws' })
+    registry.addNote({ id: 'n_a', path: join(root, 'notes', 'a.md'), workspaceKey: workspace.key, title: 'a' })
+    await service.persist(workspace.key)
 
-    service.registry.workspace('ws-A', { name: 'A', root: '/tmp/A', notesRoot: '/tmp/A/notes' })
-    // 这两次写不进去:**允许 reject**(调用方该知道索引没落盘,旧行为也是这样),
-    // 关键是**不能毒化链** —— 所以这里只吞掉,后面证明"再写还能成"。
-    await service.persist().catch(() => {})
-    await service.persist().catch(() => {})
-    assert.equal(await exists(join(blocker, 'registry.json')), null, '坏路径当然写不进去')
+    const saved = JSON.parse(await readFile(homeFile, 'utf8'))
+    assert.deepEqual(Object.keys(saved.notes), ['n_a'])
+    assert.equal(await exists(join(root, '.dsh-notes', 'index.json')), null, 'home 形态不碰工作区')
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
 
-    // 换回好路径:如果链被毒化,这一次会被跳过 → 文件不存在
-    service.config.storeDir = join(base, 'store')
-    service.registry.workspace('ws-B', { name: 'B', root: '/tmp/B', notesRoot: '/tmp/B/notes' })
-    await service.persist()
-    const saved = await exists(good)
-    assert.notEqual(saved, null, '失败过之后必须还能落盘(链没中毒)')
-    const state = JSON.parse(await readFile(good, 'utf8'))
-    assert.equal(Object.keys(state.workspaces).includes('ws-B'), true)
+test('已知工作区表:落在机器本地,且 lastUsedAt 只在会话换工作区时才更新', async () => {
+  const { base, service, store, workspace } = await setup()
+  try {
+    const roots = JSON.parse(await readFile(join(store, 'workspaces.json'), 'utf8'))
+    assert.equal(roots.workspaces[workspace.key].root, workspace.root, '根路径要登记,供切换器列表用')
+    assert.equal('notes' in roots.workspaces[workspace.key], false, '根表只放路由信息,不放语义数据')
+
+    const stamp = roots.workspaces[workspace.key].lastUsedAt
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 4s 轮询就是不停地用同一个工作区 —— 不能刷时间戳(否则表每 8s 变一次)
+    await service.workspaceOf('session-1')
+    await service.workspaceOf('session-1')
+    const again = JSON.parse(await readFile(join(store, 'workspaces.json'), 'utf8'))
+    assert.equal(again.workspaces[workspace.key].lastUsedAt, stamp, '重复读不该改 lastUsedAt')
+
+    // 另一个会话用同一个工作区 → 也要更新(它是"这个会话"的选择)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const other = new NoteService(stubContext(workspace.root), { storeDir: store, notesDir: 'notes' })
+    other.ctx.sessions.get = (id) => (String(id) === 'session-2' ? { header: { cwd: workspace.root } } : undefined)
+    await other.workspaceOf('session-2')
+    const third = JSON.parse(await readFile(join(store, 'workspaces.json'), 'utf8'))
+    assert.notEqual(third.workspaces[workspace.key].lastUsedAt, stamp, '别的会话选它也算一次使用')
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+test('工作区键是派生的:把工作区复制到别处,同一个键仍指向新根', async () => {
+  const { base, service, workspace, registry, root } = await setup()
+  try {
+    registry.workspace(workspace.key, { name: 'ws' })
+    await service.persist(workspace.key)
+    assert.equal(workspace.key, workspaceKeyOf(root), '键 = sha1(规范化 root) 前 12 位')
   } finally {
     await rm(base, { recursive: true, force: true })
   }

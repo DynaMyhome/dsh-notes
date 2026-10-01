@@ -76,8 +76,8 @@ test('回收站:删除 = 移入回收站(原文件消失、回收站里有一条
     assert.equal(result.title, '甲')
     assert.equal(await exists(file), false, '原路径的文件应该已经被挪走')
     assert.equal(await exists(result.file), true, '回收站里应该有这个文件')
-    assert.equal(service.registry.noteById(noteId), undefined, '索引里不该还留着')
-    const list = await service.listTrash()
+    assert.equal(await service.noteById(noteId), undefined, '索引里不该还留着')
+    const list = await service.listTrash({ sessionId: 'session-1' })
     assert.equal(list.entries.length, 1)
     assert.equal(list.entries[0].exists, true)
     assert.equal(list.entries[0].originalPath, file)
@@ -94,8 +94,8 @@ test('回收站:恢复 = 文件回到原路径并重新登记;原位置被占用
     assert.equal(restored.path, file)
     assert.equal(await exists(file), true, '恢复后文件必须回到原路径')
     assert.equal(await exists(trashed.file), false, '回收站里的副本应该被挪走')
-    assert.equal((await service.listTrash()).entries.length, 0)
-    assert.ok(service.registry.noteById(restored.note.id), '恢复后应该重新登记进索引')
+    assert.equal((await service.listTrash({ sessionId: 'session-1' })).entries.length, 0)
+    assert.ok(await service.noteById(restored.note.id), '恢复后应该重新登记进索引')
 
     // 再删一次,然后人为在原路径放一个同名文件 → 恢复必须被拒绝
     const again = await service.trashNote({ sessionId: 'session-1', noteId: restored.note.id })
@@ -115,12 +115,12 @@ test('回收站:彻底删除才真的 unlink,清空后清单为空', async () =>
   try {
     const trashed = await service.trashNote({ sessionId: 'session-1', noteId })
     assert.equal(await exists(trashed.file), true)
-    const purged = await service.purgeTrash({ all: true })
+    const purged = await service.purgeTrash({ sessionId: 'session-1', all: true })
     assert.equal(purged.removed, 1)
     assert.equal(await exists(trashed.file), false, '彻底删除后文件不该还在')
     assert.equal(await exists(file), false)
-    assert.equal((await service.listTrash()).entries.length, 0)
-    await assert.rejects(() => service.purgeTrash({ all: true }), /回收站是空的/)
+    assert.equal((await service.listTrash({ sessionId: 'session-1' })).entries.length, 0)
+    await assert.rejects(() => service.purgeTrash({ sessionId: 'session-1', all: true }), /回收站是空的/)
   } finally {
     await rm(base, { recursive: true, force: true })
   }

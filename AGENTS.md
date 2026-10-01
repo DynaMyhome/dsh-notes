@@ -11,18 +11,48 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
    **两处例外,都只在用户显式动作下发生**(代码里都有注释):
    - **改名**:右键「重命名」/ 新建后行内改名 → 同目录 `rename`,目标已存在则拒绝(绝不覆盖);
    - **删除 = 移入回收站**:右键「Delete (move to trash)」→ 文件挪到
-     `$DSH_HOME/knowledge/trash/`(在笔记根之外,重扫捞不回来)+ 索引移除,**可恢复**;
+     `<工作区>/.dsh-notes/.trash/`(**点目录**,重扫捞不回来)+ 索引移除,**可恢复**;
      真正的 `unlink` 只发生在「彻底删除 / 清空回收站」,且要点两次确认;
      恢复时原位置被占用则拒绝,绝不覆盖。
-2. **Markdown 是权威,索引是可重建的派生态。** 索引在
-   `$DSH_HOME/knowledge/registry.json`(或 `Config.storeDir`);笔记身份靠 frontmatter 里的
-   `dsh-note-id`,索引丢了用 `rescan` 恢复。索引**绝不**反向复活已删除的文件;
-   回收站是独立一层(`trash/index.json`),不参与对账。
+2. **Markdown 是权威,索引是可重建的派生态。** 语义索引在
+   **`<工作区>/.dsh-notes/index.json`**(跟着工作区走);机器本地只剩派生缓存与"见过哪些工作区"。
+   笔记身份靠 frontmatter 里的 `dsh-note-id`,索引丢了用 `rescan` 恢复。索引**绝不**反向复活已删除的文件;
+   回收站是独立一层(`.dsh-notes/.trash/trash.json`),不参与对账。
 3. **只有一套内容工具。** 读/写/改/搜继续用 `read` / `write` / `edit` / `glob` / `grep` / `bash`;
    本插件只额外提供 `knowledge` 工具(登记/注销/归类/分类树/未归类/重扫)。不许再长一套 note CRUD。
 4. **不改 DSH 核心。** 只用官方扩展点:`ctx.sidebarRightTabs` / `ctx.slots`(`sidebar.right.pane.tab`)、
    `webServer.register`(自鉴权)、`fs`(守卫式写入)、`workspaceFiles`(只读 Remote)。权威接口面以
    `cordis_inspect_list` / `cordis_inspect_query` 与已安装包的 `lib/types/*.d.ts` 为准。
+
+## 数据放在哪(改存储前先读)
+
+**语义数据跟着工作区走;机器本地只留派生缓存与"见过哪些工作区"。** 这是本插件的存储契约:
+用户备份工作区、或把整份工作区搬到另一台机器/另一个路径,装上同一个插件就能原样读出来。
+
+| 数据 | 位置 | 性质 |
+| --- | --- | --- |
+| 笔记身份 | `<root>/notes/*.md` 的 frontmatter `dsh-note-id` | 权威 |
+| 图片资产 | `<root>/.dsh-assets/<noteId>/` | 工作区数据 |
+| **薄索引**(分类树 / 归属 / 忽略 / 置顶 / 最近 / `refs` / 扫描范围 / 笔记根覆盖) | **`<root>/.dsh-notes/index.json`** | 可重建(rescan),但**人工组织只在这里** |
+| **回收站**(文件本体 + `trash.json`) | **`<root>/.dsh-notes/.trash/`** | 工作区数据 |
+| 自忽略文件 | `<root>/.dsh-notes/.gitignore`(内容 `*`) | 让插件数据不进用户的 `git status` |
+| 扫描缓存 `relPath → {v,s,id}` | `$DSH_HOME/knowledge/index/<workspaceKey>.json` | 派生数据(删了只影响扫描速度) |
+| 已知工作区根表 | `$DSH_HOME/knowledge/workspaces.json` | 机器状态(切换器列表 + `lastUsedAt`) |
+| 标签/分屏布局、字号 | 浏览器 `localStorage` | **设备本地**(刻意不跟着工作区走) |
+
+几条不变量:
+
+- **工作区键是派生的,不是数据**:`workspaceKey = sha1(规范化 root)[:12]`。文件里存了也不可信 ——
+  装载时按**当前 root** 重算,并把旧根之下的**绝对路径**(笔记 / 自定义笔记根)按相对位置
+  **重定位**到新根(见 `store.js` 的 `adoptWorkspaceKey`)。少了这一步,搬走的工作区会出来一堆
+  指向旧机器的死路径。
+- **点目录天然安全**:两处走目录都 `entry.name.startsWith('.') → continue`,所以
+  `.dsh-notes/`(含 `.trash/` 里的 `.md`)永远不会被当成候选笔记重新登记回树。
+- **升级是懒迁移**:`<root>/.dsh-notes/index.json` 不存在而旧的 `$DSH_HOME/knowledge/registry.json`
+  里有这个工作区的切片 → 自动迁进来,**旧文件原样保留**(备份)。`storeScope: 'home'` 是逃生开关
+  (完全旧行为);`knowledge` 工具的 `migrate` op 是**显式**双向搬运(移动语义)。
+- **只读工作区**:读路径(`persistSafe`)只记一次日志、不抛 —— 界面仍能用内存里的索引;
+  用户**显式写操作**才如实报错。
 
 ## 工作区 md 的三类模型(改动前先读)
 
@@ -39,8 +69,9 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
   **默认只扫 notes/**,要看别处必须在面板里加根(或 Agent 用 `knowledge ignore/include` 点名)。
 - 一趟走不完会把**队列前沿**留在内存(`walkStates`),下次调用接着走;界面按块拉取并显示进度。
 - **只有整趟走完且没被截断**才做"文件没了"的对账 —— 截断时绝不误删条目。
-- 增量索引在 `$DSH_HOME/knowledge/index/<workspaceKey>.json`(`relPath → {v,s,id}`):
-  版本/大小没变就不读文件;变了才用 `fs.readByteRange` 读前 4KB 解 id。
+- 增量索引(扫描缓存)在 `$DSH_HOME/knowledge/index/<workspaceKey>.json`(`relPath → {v,s,id}`):
+  版本/大小没变就不读文件;变了才用 `fs.readByteRange` 读前 4KB 解 id。它是**派生数据**,
+  所以留在机器本地、不跟着工作区走(否则每次都往用户仓库里写几十 KB)。
 - 「忽略」只动映射,永不删文件;已登记的文件被删 → 走目录时按 id 找不到 → 条目一起消失。
 
 ## 渲染管线与热路径(最容易踩坑,改动前先读)
@@ -201,7 +232,8 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | 路径 | 作用 |
 | --- | --- |
 | `lib/index.js` | Host 半:配置、索引装配、路由注册、`knowledge` 工具 |
-| `lib/service.js` | 工作区解析与切换、扫描(目录前沿续走)、三类分类、回收站、守卫式保存;`persist()` 内容去重 + 抗中毒(单测 `test/service-persist.test.mjs`) |
+| `lib/service.js` | 工作区解析与切换、扫描(目录前沿续走)、三类分类、回收站、守卫式保存;**每个工作区一份 registry**(`registryFor` / `persist(key)`) |
+| `lib/store.js` | **存储位置决策 + 数据切片(纯函数)**:工作区/机器本地路径、切片与合并、键与根路径的认领;单测 `test/store.test.mjs` |
 | `lib/registry.js` | 按工作区的薄索引(登记/忽略/忽略 glob/扫描根/最近使用) |
 | `lib/notes.js` | 纯函数:路径 / frontmatter / 标题(=文件名)/ glob 匹配 |
 | `lib/routes.js` | 内容路由 `/dsh-notes/*`(全部接受 `workspaceKey`) |
@@ -236,7 +268,7 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
 | `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
-| `test/` | `node --test` 单测(164 条):含 `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(索引去重/抗中毒)、`locale-guard`(双语文案守卫) |
+| `test/` | `node --test` 单测(184 条):含 `store`(存储纯函数)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫) |
 
 ## 开发与验证
 
@@ -279,8 +311,8 @@ ln -s /home/phyd/.dsh/profiles/web/node_modules node_modules
 - 只读决策层的行为用 Node 就能验(`test/markdown-render.test.mjs` 走真解析器),不要用截图当证据;
   热路径上的改动先用靶子用例红→绿,再动浏览器。
 
-> **升级/重装依赖之后**:先在**工作区根**跑那四组补丁校验脚本(见根 `AGENTS.md`),
-> 再重启 web —— 否则本机六组补丁可能已丢失(尤其 A2 临时组,仅 0.2.0-rc.1 需要)。
+> **升级/重装依赖之后**:先在**工作区根**跑那三个补丁校验脚本(见根 `AGENTS.md`),
+> 再重启 web —— 否则本机五组补丁可能已丢失(A2 临时组已于 2026-10-01 随 rc.2 退休)。
 
 ## 事实来源
 

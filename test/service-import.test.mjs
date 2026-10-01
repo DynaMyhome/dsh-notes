@@ -95,7 +95,7 @@ test('pin: 置顶/取消置顶写进本工作区 pins', async () => {
     const note = await service.importFile({ sessionId: 'session-1', name: '甲.md', text: '# 甲' })
     const workspace = await service.workspaceOf('session-1')
     await service.pin({ sessionId: 'session-1', noteId: note.id, pinned: true })
-    const registry = await service.ensureLoaded()
+    const registry = await service.registryFor(workspace.key, { root: workspace.root, name: workspace.name })
     assert.deepEqual(registry.toJSON().workspaces[workspace.key].pins, [note.id])
 
     await service.pin({ sessionId: 'session-1', noteId: note.id, pinned: false })

@@ -364,9 +364,16 @@ export async function trashNote(
   return call('trash', { sessionId, noteId })
 }
 
-/** 读回收站清单。 */
-export async function fetchTrash(): Promise<{ root: string; entries: TrashEntry[] }> {
-  const response = await fetch(`${PREFIX}/trash/list`, { credentials: 'same-origin' })
+/**
+ * 读回收站清单。
+ *
+ * 必须带 `sessionId`(甚至 `workspaceKey`):回收站现在**跟着工作区走**
+ * (`<root>/.dsh-notes/.trash`),主机得先知道问的是哪个工作区。
+ */
+export async function fetchTrash(sessionId: string): Promise<{ root: string; entries: TrashEntry[] }> {
+  const query = new URLSearchParams({ sessionId })
+  if (activeWorkspaceKey !== null) query.set('workspaceKey', activeWorkspaceKey)
+  const response = await fetch(`${PREFIX}/trash/list?${query.toString()}`, { credentials: 'same-origin' })
   return (await unwrap(response)) as { root: string; entries: TrashEntry[] }
 }
 
@@ -378,9 +385,13 @@ export async function restoreTrash(
   return call('trash/restore', { sessionId, id })
 }
 
-/** 彻底删除(`all` = 清空回收站)。 */
-export async function purgeTrash(id: string | null, all = false): Promise<{ removed: number }> {
-  return call('trash/purge', all ? { all: true } : { id })
+/** 彻底删除(`all` = 清空回收站;回收站按工作区存在,所以要 sessionId)。 */
+export async function purgeTrash(
+  sessionId: string,
+  id: string | null,
+  all = false,
+): Promise<{ removed: number }> {
+  return call('trash/purge', all ? { sessionId, all: true } : { sessionId, id })
 }
 
 /** 把外部内容导入成笔记(拖进来的 `.md`)。 */

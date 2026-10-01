@@ -40,7 +40,8 @@ npm run setup && npm run build     # 首次需要 node_modules 符号链接,见 
 | --- | --- | --- |
 | `notesDir` | `notes` | 笔记根(相对工作区根);「未归类」扫描范围 |
 | `assetsDir` | `.dsh-assets` | 粘贴/拖入图片的托管目录(内按 noteId 分目录) |
-| `storeDir` | 空 | 索引目录;空 = `$DSH_HOME/knowledge` |
+| `storeScope` | `workspace` | 语义数据放哪:**`workspace` = 工作区内的 `.dsh-notes/`(跟着工作区走)**;`home` = 旧行为,全放 `$DSH_HOME/knowledge/` |
+| `storeDir` | 空 | **机器本地**那一份(扫描缓存 / 已知工作区表)放哪;空 = `$DSH_HOME/knowledge` |
 | `unfiledDepth` / `unfiledMax` | 3 / 200 | 「未归类」扫描深度与条数上限 |
 | `autosaveMs` | 800 | 自动保存静默时长;0 = 关闭 |
 | `pasteImage` | `copy` | `copy` 复制进托管目录 / `link` 保持原路径 |
@@ -79,8 +80,8 @@ npm run setup && npm run build     # 首次需要 node_modules 符号链接,见 
 笔记树、打开着的标签、光标与滚动都在原处,切回来不会重新拉一遍(「读取中…」只在第一次打开时出现);
 隐藏期间也不轮询,切回来立刻对一次账。
 
-**删除 = 移入回收站**:右键「Delete (move to trash)」把文件挪到 `$DSH_HOME/knowledge/trash/`
-(笔记根之外,重扫不会捞回来)并从索引移除;树工具栏 🗑 的回收站面板可**恢复**或**彻底删除**
+**删除 = 移入回收站**:右键「Delete (move to trash)」把文件挪到 `<工作区>/.dsh-notes/.trash/`
+(点目录,重扫不会捞回来,**跟着工作区走**)并从索引移除;树工具栏 🗑 的回收站面板可**恢复**或**彻底删除**
 (彻底删除要点两次确认)。真正的 `unlink` 只发生在这一步。
 
 **手感与细节(2026-10-01 一轮修复)**:
@@ -95,9 +96,37 @@ npm run setup && npm run build     # 首次需要 node_modules 符号链接,见 
   (`--dsw-specific-menu` + `backdrop-filter: blur`),背后正文不再可读。
 - **不再无谓写盘**:索引内容没变就不落盘(以前每 ~8s 整份重写一次);一次写失败也不会让后续落盘失效。
 
+## 数据放在哪(换机器怎么用)
+
+插件自己的数据**跟着工作区走** —— 把工作区备份走、或整份拷到另一台机器,装上同一个插件就能原样读出来
+(树结构、分类、忽略规则、置顶、回收站都在里面):
+
+```
+<工作区>/
+├── notes/                       # 你的笔记(标题 = 文件名)
+├── .dsh-assets/<noteId>/        # 粘贴/拖入的图片
+└── .dsh-notes/                  # 插件数据(自动加了 .gitignore,不进 git status)
+    ├── index.json               #   分类树 / 归属 / 忽略 / 置顶 / 跨工作区映射 / 扫描范围
+    └── .trash/                  #   回收站(可恢复的删除)
+```
+
+机器本地(`$DSH_HOME/knowledge/`)只剩两类**不是你的知识**的东西:扫描缓存(删了只是下次慢一点)、
+以及"这台机器见过哪些工作区"(`workspaces.json`,切换工作区列表用)。
+
+- **换机器/换路径**:整份拷过去、用那个目录开会话即可。索引里记的是绝对路径,装载时会按新根
+  **自动重定位**,所以不会出来一堆指向老机器的死路径。
+- **`.dsh-notes/` 删了会怎样**:笔记文件本身不丢;重新扫描(`rescan`)能按每篇里的 `dsh-note-id`
+  把"哪些文件是笔记"认回来,但**分类树 / 归属 / 忽略规则 / 置顶**只存在于 `index.json`,删了就没了
+  (会退化成按文件夹平铺的树)。要备份"人工组织",就带上这个目录。
+- **旧版本升级**:第一次打开工作区时,会把 `$DSH_HOME/knowledge/registry.json` 里属于它的那部分
+  自动迁进 `.dsh-notes/index.json`,**旧文件原样保留**作备份。
+- **不想要工作区里的这个目录**:`storeScope: home` 回到旧行为(全部放 `$DSH_HOME`),
+  适合只读/共享仓库;也可以用 `knowledge` 工具的 `migrate` op 在两个位置之间**显式搬运**。
+- **标签/分屏布局和字号**故意留在浏览器本地:它们是"这台设备/这个窗口"的偏好,不跟着工作区跑。
+
 ## 状态
 
-P0–P4 全部落地(`node --test test/*.test.mjs` 164 条;开发与验证步骤见 `AGENTS.md`)。
+P0–P4 全部落地,存储改造完成(`node --test test/*.test.mjs` 184 条;开发与验证步骤见 `AGENTS.md`)。
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
