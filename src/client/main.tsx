@@ -91,6 +91,28 @@ const ZH: Record<string, string> = {
   'files.back': '返回',
   'files.badge': '有 id',
   'files.hadId': '这个文件已有 dsh-note-id:纳入时沿用,跨改名/移动也认得出',
+  // 排序(候选/杂项两段共用;时间用 Host 从 provider 版本号里解出的 mtime)
+  'files.sort': '排序',
+  'files.sortTime': '最近修改',
+  'files.sortName': '名称',
+  'files.sortPath': '路径',
+  'files.sortSize': '大小',
+  'files.dirAsc': '升序',
+  'files.dirDesc': '降序',
+  // 目录选择器(面板内浏览;数据来自官方 uiWorkspace.listDirectory)
+  'files.pickDir': '选择目录…',
+  'files.pickTitle': '选择要扫描的目录',
+  'files.pickHint': '只能选本工作区内的目录;选中后会加进上面的「扫描范围」',
+  'files.pickUse': '选择这个目录',
+  'files.pickRoot': '整个工作区',
+  'files.pickCancel': '取消',
+  'files.pickLoading': '正在读取目录…',
+  'files.pickEmpty': '这里没有子目录',
+  'files.pickTruncated': '目录过多,只列出了前一部分',
+  'files.pickOutside': '只能选择本工作区内的目录',
+  'files.pickFailed': '目录读取失败:{m}',
+  'files.pickUp': '上一级',
+  'files.pickPick': '进入该目录',
   'status.included': '已纳入 {n} 篇',
   'status.includedSome': '已纳入 {n} 篇,{m} 篇失败',
   'status.ignored': '已标为杂项 {n} 项(可在「已忽略」放回)',
@@ -109,6 +131,10 @@ const ZH: Record<string, string> = {
   'status.wikiMissing': '没有这篇笔记(不会自动新建)',
   'status.created': '已新建并登记',
   'status.collectionCreated': '已新建分类',
+  'status.collectionRenamed': '已重命名分类',
+  'status.collectionDeleted': '已删除分类(里面的笔记已上提到上级)',
+  'status.collectionUnfiled': '已删除分类(里面的笔记已留为未归类)',
+  'status.rootAdded': '已加入扫描范围:{p}',
   'status.registered': '已纳入笔记树',
   'status.moved': '已移动',
   'status.rescanned': '已重新扫描',
@@ -198,6 +224,9 @@ const ZH: Record<string, string> = {
   'menu.reveal': '在文件树中定位',
   'menu.newNoteHere': '在此新建笔记',
   'menu.newSubCollection': '在此新建子分类',
+  'menu.deleteCollection': '删除分类(不动文件)',
+  'menu.deleteMoveUp': '笔记移到上级分类',
+  'menu.deleteUnfile': '笔记留为未归类',
   'menu.newNote': '新建笔记',
   'menu.newCollection': '新建分类',
   'menu.unregister': '移出笔记树(不删文件)',
@@ -307,6 +336,26 @@ const EN: Record<string, string> = {
   'files.back': 'Back',
   'files.badge': 'has id',
   'files.hadId': 'Already carries a dsh-note-id: filing reuses it, so renames/moves stay recognisable',
+  'files.sort': 'Sort',
+  'files.sortTime': 'Last modified',
+  'files.sortName': 'Name',
+  'files.sortPath': 'Path',
+  'files.sortSize': 'Size',
+  'files.dirAsc': 'Ascending',
+  'files.dirDesc': 'Descending',
+  'files.pickDir': 'Choose a folder…',
+  'files.pickTitle': 'Choose a folder to scan',
+  'files.pickHint': 'Only folders inside this workspace; the choice is added to the scan scope above',
+  'files.pickUse': 'Use this folder',
+  'files.pickRoot': 'Whole workspace',
+  'files.pickCancel': 'Cancel',
+  'files.pickLoading': 'Reading the folder…',
+  'files.pickEmpty': 'No subfolders here',
+  'files.pickTruncated': 'Too many folders — only the first part is listed',
+  'files.pickOutside': 'Only folders inside this workspace can be chosen',
+  'files.pickFailed': 'Could not read the folder: {m}',
+  'files.pickUp': 'Up one level',
+  'files.pickPick': 'Open this folder',
   'status.included': 'Filed {n} note(s)',
   'status.includedSome': 'Filed {n}, {m} failed',
   'status.ignored': 'Marked {n} as ignored (restore from the Ignored tab)',
@@ -325,6 +374,10 @@ const EN: Record<string, string> = {
   'status.untitled': 'Untitled',
   'status.newCollection': 'New collection',
   'status.collectionCreated': 'Collection created',
+  'status.collectionRenamed': 'Collection renamed',
+  'status.collectionDeleted': 'Collection deleted (its notes moved to the parent)',
+  'status.collectionUnfiled': 'Collection deleted (its notes are now unfiled)',
+  'status.rootAdded': 'Added to the scan scope: {p}',
   'status.registered': 'Added to the notes tree',
   'status.moved': 'Moved',
   'status.rescanned': 'Rescanned',
@@ -358,6 +411,9 @@ const EN: Record<string, string> = {
   'menu.reveal': 'Reveal in file tree',
   'menu.newNoteHere': 'New note here',
   'menu.newSubCollection': 'New sub-collection',
+  'menu.deleteCollection': 'Delete collection (keeps files)',
+  'menu.deleteMoveUp': 'Move its notes to the parent',
+  'menu.deleteUnfile': 'Leave its notes unfiled',
   'menu.newNote': 'New note',
   'menu.newCollection': 'New collection',
   'menu.unregister': 'Remove from notes tree (keeps the file)',
@@ -530,9 +586,36 @@ export function apply(ctx: any): void {
         key: ID,
         locale: NS,
       },
-      NotesPaneWithBoundary as any,
+      ((slotProps: Record<string, unknown>) => (
+        <PaneBoundary>
+          <NotesPane {...(slotProps as never)} uiWorkspace={readUiWorkspace(ctx)} />
+        </PaneBoundary>
+      )) as never,
     ),
   )
+}
+
+/**
+ * 读官方 `uiWorkspace` 服务(可选)。
+ *
+ * 只用它的 `listDirectory` —— 目录选择器靠这个原语在面板里自己拼浏览器。
+ * **不要**用 `pickDirectory()`:那需要 `native` capability,本 profile 组合的是 `browse`
+ * 后端,调用会被 `directory-picker/unavailable` 拒绝(实测)。
+ *
+ * 拿不到时返回 undefined,面板就不显示「选择目录…」(官方口径:藏起入口而不是失败)。
+ * `listDirectory` 必须**包一层**(而不是直接把方法传出去)—— 服务方法依赖 `this`。
+ * @param ctx - 客户端根上下文。
+ * @returns 最小接口面,或 undefined。
+ */
+function readUiWorkspace(ctx: any): { listDirectory: (path?: string, signal?: AbortSignal) => Promise<unknown> } | undefined {
+  let service: any
+  try {
+    service = typeof ctx.get === 'function' ? ctx.get('uiWorkspace') : undefined
+  } catch {
+    return undefined
+  }
+  if (service === undefined || service === null || typeof service.listDirectory !== 'function') return undefined
+  return { listDirectory: (path?: string, signal?: AbortSignal) => service.listDirectory(path, signal) }
 }
 
 /** 只声明本插件真正读取的服务(硬依赖可选服务会在他处禁用该服务时拖垮整个 GUI)。 */
@@ -555,24 +638,12 @@ function NotesChipTitle(props: { useTabInfo: () => { tab: { title: string } }; t
 }
 
 /**
- * 面板 = NotesPane 外面套一层错误边界。
- *
- * 注意:注册的必须是**带 children 的包装组件** —— 直接把边界类注册上去的话
- * children 是空的,面板什么都不渲染(实测踩到:整个笔记区域空白)。
- */
-function NotesPaneWithBoundary(props: Record<string, unknown>): React.ReactElement {
-  return (
-    <PaneBoundary>
-      <NotesPane {...(props as never)} />
-    </PaneBoundary>
-  )
-}
-
-/**
  * 笔记面板的渲染兜底。
  *
  * 宿主插槽在渲染抛错时只留一个空 div(`data-slot-error`),界面上看不到任何信息。
  * 这一层把错误的栈直接画出来,顺带把上下文写进 console,免得再出现"面板莫名空白"。
+ * 注册时必须是**带 children 的包装组件**(见注册处):直接把边界类注册上去,
+ * children 是空的,面板什么都不渲染(实测踩到:整个笔记区域空白)。
  */
 class PaneBoundary extends React.Component<{ children?: React.ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null }
