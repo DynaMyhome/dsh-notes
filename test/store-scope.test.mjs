@@ -226,6 +226,25 @@ test('.dsh-notes 永远不被扫描:回收站里的 md 不会被当成候选笔�
   }
 })
 
+test('只看一眼的工作区:不创建 .dsh-notes/(切过去渲染一次树也不留东西)', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'dsh-notes-scope-'))
+  const root = join(base, 'idle')
+  await mkdir(join(root, 'notes'), { recursive: true })
+  const { service } = await setup({ roots: { 'session-1': root } })
+  try {
+    const tree = await service.tree({ sessionId: 'session-1', force: true })
+    assert.equal(tree.stats.notes, 0)
+    assert.equal(await exists(join(root, '.dsh-notes')), false, '看一眼不该在工作区里建目录')
+
+    // 真有东西要记时才建(登记一篇笔记)
+    await writeFile(join(root, 'notes', '甲.md'), '---\ndsh-note-id: n_jia\n---\n\n甲\n', 'utf8')
+    await service.register({ sessionId: 'session-1', path: join(root, 'notes', '甲.md') })
+    assert.equal(await exists(join(root, '.dsh-notes', 'index.json')), true)
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
 test('回收站跟着工作区走:文件搬进 <root>/.dsh-notes/.trash,可恢复、可彻底删除', async () => {
   const base = await mkdtemp(join(tmpdir(), 'dsh-notes-scope-'))
   const root = join(base, 'ws')

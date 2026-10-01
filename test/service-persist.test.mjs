@@ -95,9 +95,11 @@ test('workspace 形态:索引落在工作区里,且放了一个自忽略的 .git
 })
 
 test('workspace 形态:内容没变就不重写(inode/mtime 都不动)', async () => {
-  const { base, service, workspace, registry, file } = await setup()
+  const { base, service, workspace, registry, file, root } = await setup()
   try {
     registry.workspace(workspace.key, { name: 'ws' })
+    // 空切片是**刻意不落盘**的(看了一眼的工作区不该多出点目录),所以先放一篇笔记
+    registry.addNote({ id: 'n_a', path: join(root, 'notes', 'a.md'), workspaceKey: workspace.key, title: 'a' })
     await service.persist(workspace.key)
     const first = await exists(file)
     assert.notEqual(first, null, '第一次必须真的落盘')
