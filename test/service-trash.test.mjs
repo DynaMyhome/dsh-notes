@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { NoteService } from '../lib/service.js'
+import { toPosix } from '../lib/notes.js'
 
 /**
  * 回收站的服务层测试(**用真文件**,因为 trash/restore 走的是 node:fs 的 rename/copy)。
@@ -80,7 +81,7 @@ test('回收站:删除 = 移入回收站(原文件消失、回收站里有一条
     const list = await service.listTrash({ sessionId: 'session-1' })
     assert.equal(list.entries.length, 1)
     assert.equal(list.entries[0].exists, true)
-    assert.equal(list.entries[0].originalPath, file)
+    assert.equal(list.entries[0].originalPath, toPosix(file))
   } finally {
     await rm(base, { recursive: true, force: true })
   }
@@ -91,7 +92,7 @@ test('回收站:恢复 = 文件回到原路径并重新登记;原位置被占用
   try {
     const trashed = await service.trashNote({ sessionId: 'session-1', noteId })
     const restored = await service.restoreTrash({ sessionId: 'session-1', id: trashed.id })
-    assert.equal(restored.path, file)
+    assert.equal(restored.path, toPosix(file))
     assert.equal(await exists(file), true, '恢复后文件必须回到原路径')
     assert.equal(await exists(trashed.file), false, '回收站里的副本应该被挪走')
     assert.equal((await service.listTrash({ sessionId: 'session-1' })).entries.length, 0)

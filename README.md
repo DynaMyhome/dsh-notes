@@ -185,7 +185,7 @@ npm run setup && npm run build     # 首次需要 node_modules 符号链接,见 
 
 ## 状态
 
-P0–P4 全部落地,存储改造完成(`node --test test/*.test.mjs` **238** 条;开发与验证步骤见 `AGENTS.md`)。
+P0–P4 全部落地,存储改造完成(`node --test test/*.test.mjs` **250** 条;开发与验证步骤见 `AGENTS.md`)。
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
@@ -275,3 +275,51 @@ DSH 的 `设置 → 插件` 列表会给每个插件画一张卡片。卡片的�
   可选读取的服务（如 `uiWorkspace`）**绝不能**写进去，否则最小组合里整个插件起不来。
 - **平台**：Windows 与 WSL 都实跑过；`link:` 安装时 `node_modules` 必须是指向 profile
   `node_modules` 的符号链接（见 `AGENTS.md`，**别在本目录跑 `npm install`**）。
+
+## 平台支持
+
+插件**只在浏览器里画界面 + 只通过宿主的 `fs` 服务读写文件**：自己不起进程、不碰原生模块、
+没有 postinstall，所以三个平台跑的是同一份代码。已实测的两条、以及 macOS 的诚实边界：
+
+| 平台 | 状态 | 证据 |
+| --- | --- | --- |
+| **WSL / Linux** | ✅ 开发与日常使用 | `npm test` **250 条**全绿（Ubuntu 24.04 · node 22.19） |
+| **Windows** | ✅ 单测全绿（**真实 Windows 文件系统**） | 32 个测试文件 **208 条**全绿（node 22.14；在 `%TEMP%` 上真建/真读/真改名/真删除，回收站与行尾保真都跑到） |
+| **macOS** | ⚠️ 代码级推理，**没有真机** | 与 Linux 走同一条 POSIX 分支；下面列出的差异已在代码里处理，但未经真机验证 |
+
+怎么跑的（可复现）：Windows 侧用 WSL interop 调那一侧的 node 直接指向本仓库 ——
+`powershell.exe -Command "Set-Location -LiteralPath 'D:\…\dsh-notes'; node --experimental-strip-types --test <除 4 个需要 harness 依赖的文件外的全部>"`。
+那 4 个文件（`markdown-render` / `markdown-syntax` / `cell-inline` / `service-api`）要 `@lezer/*`
+与 `@deepseek-ai/*`，只能在装了 profile 的那一侧跑；它们是纯字符串/渲染逻辑，与平台无关。
+
+### 内部只有一种路径写法
+
+插件内部、以及返回给界面与索引的路径，**一律 `/` 分隔**（`lib/notes.js` 的 `toPosix`）。
+原因很实际：Windows 上 `node:path` 的 `join()` 产出 `\`，不归一就会出现「同一个目录两种写法」，
+字符串比较与集合键随即静默失配（2026-10-02 实测：Windows node 上 12 条测试红，全部是 `C:/…` vs `C:\…`）。
+
+`test/platform-paths.test.mjs` 把这条钉成可执行的约定，而且**喂的是 Win32 输入的字符串** ——
+所以在 Linux 上跑也照样能抓到回归（注入一次原生 `join` 验证过：立刻 1 条红）。
+宿主与 Win32 API 都接受 `/`，所以归一之后**不需要**在调用前换回 `\`。
+
+### 已经处理掉的三平台真实差异
+
+- **Windows 保留设备名**：`CON` / `PRN` / `AUX` / `NUL` / `COM1`–`COM9` / `LPT1`–`LPT9`，
+  含 `CON.md` 这种**带后缀也保留**的写法 → 生成文件名时让开（`CON` → `CON-`，`CON.md` → `CON-.md`）。
+- **尾随点与空格**（Windows 会静默截断）、非法字符 `\ / : * ? " < > |`、控制符 → 都在
+  `sanitizeFileName()` 里处理；长度按 80 个字符封顶，宽字符下也远低于 ext4 的 255 字节单组件上限。
+- **盘符大小写不敏感**：`c:\ws` 与 `C:\ws` 是同一个工作区 → 路径比较对盘符段忽略大小写
+  （POSIX 路径仍严格区分大小写，这是有意的，也测了）。
+- **行尾**：CRLF 笔记保存时不会把整份文件的行尾改写（`detectEol` / `applyEol`），这条在 Windows 上也跑过。
+- **目录选择器的面包屑**：官方给的 `crumbs[].path` 与我们会话里的 cwd 可能大小写不同 →
+  按「互相都能相对化」匹配，而不是字符串相等。
+
+### 已知边界（没在代码里赌）
+
+- **macOS 的 Unicode 归一化**：HFS+ 会做 NFD 归一化，带重音/组合字符的**文件名**在极端情况下
+  可能出现两种拼写（APFS 好得多）。插件认的是 frontmatter 里的 `dsh-note-id`，所以最坏结果是
+  树里多一条；没有真机，不臆造结论。
+- **超长路径**：Windows 的 260 字符上限受「长路径支持」开关影响；插件已把单段限制在 80 字符，
+  但工作区根本身很深时仍可能触顶（那是宿主 `fs` 报错，不是插件逻辑）。
+- **安装方式**：`dsh plugin add` 装的是仓库里**已构建**的 `lib/client.js`，用户机器上不需要 esbuild
+  —— `npm run setup` / `npm run build` 只给开发用。

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { NoteService } from '../lib/service.js'
+import { toPosix } from '../lib/notes.js'
 
 /**
  * 「工作区没有笔记根目录」与「给工作区换一个笔记根」。
@@ -111,7 +112,7 @@ test('createNotesDir:创建笔记根、幂等、只允许工作区内', async ()
   try {
     const first = await service.createNotesDir({ sessionId: 'session-1' })
     assert.equal(first.created, true)
-    assert.equal(first.path, join(root, 'notes'))
+    assert.equal(first.path, toPosix(join(root, 'notes')))
     assert.equal((await stat(join(root, 'notes'))).isDirectory(), true)
 
     const again = await service.createNotesDir({ sessionId: 'session-1' })
@@ -140,10 +141,10 @@ test('setNotesRoot:把已有目录设为该工作区的笔记根,并按它扫描
   try {
     const note = await service.register({ sessionId: 'session-1', path: join(root, 'docs', '指南.md') })
     const result = await service.setNotesRoot({ sessionId: 'session-1', path: 'docs' })
-    assert.equal(result.notesRoot, join(root, 'docs'))
+    assert.equal(result.notesRoot, toPosix(join(root, 'docs')))
 
     const tree = await service.tree({ sessionId: 'session-1', force: true })
-    assert.equal(tree.workspace.notesRoot, join(root, 'docs'), '树要用新的笔记根')
+    assert.equal(tree.workspace.notesRoot, toPosix(join(root, 'docs')), '树要用新的笔记根')
     assert.equal(tree.notesDirMissing, false)
     assert.equal(tree.notes.some((item) => item.id === note.id), true)
 

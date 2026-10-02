@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { NoteService } from '../lib/service.js'
-import { workspaceKeyOf } from '../lib/notes.js'
+import { toPosix, workspaceKeyOf } from '../lib/notes.js'
 
 /**
  * **语义数据跟着工作区走**(`storeScope: 'workspace'`,默认)。
@@ -189,7 +189,7 @@ test('把工作区复制到别的路径:同一棵树照常读出来(索引记相
   // 笔记与笔记根都是相对的 —— 所以"换个目录 / 换台机器"根本不需要重定位那一趟。
   const textInA = JSON.stringify(savedInA)
   assert.equal(textInA.includes(`${rootA}/notes`), false, '笔记路径与笔记根都不该记绝对路径')
-  assert.equal(savedInA.workspaces[workspaceKeyOf(rootA)].root, rootA, 'root 是锚点,必须保留')
+  assert.equal(savedInA.workspaces[workspaceKeyOf(rootA)].root, toPosix(rootA), 'root 是锚点,必须保留(落盘按插件约定归一)')
   assert.equal(savedInA.notes.n_old.rel, 'notes/旧笔记.md')
   assert.equal('path' in savedInA.notes.n_old, false)
   assert.equal(savedInA.workspaces[workspaceKeyOf(rootA)].notesRootRel, 'notes')
@@ -197,13 +197,13 @@ test('把工作区复制到别的路径:同一棵树照常读出来(索引记相
   const { base: base2, service } = await setup({ roots: { 'session-2': rootB } })
   try {
     const tree = await service.tree({ sessionId: 'session-2', force: true })
-    assert.equal(tree.workspace.root, rootB, '工作区根是当前路径')
+    assert.equal(tree.workspace.root, toPosix(rootB), '工作区根是当前路径')
     assert.notEqual(workspaceKeyOf(rootB), workspaceKeyOf(rootA), '换路径 = 换键(前提成立)')
     assert.equal(tree.stats.notes, 1, '笔记条目还在')
-    assert.equal(tree.notes[0].path, join(rootB, 'notes', '旧笔记.md'), '绝对路径按**当前根**展开')
+    assert.equal(tree.notes[0].path, toPosix(join(rootB, 'notes', '旧笔记.md')), '绝对路径按**当前根**展开')
     assert.equal(tree.notes[0].relPath, 'notes/旧笔记.md')
     assert.equal(tree.collections[0].name, '老分类', '人工组织跟着备份走')
-    assert.equal(tree.workspace.notesRoot, join(rootB, 'notes'), '笔记根也跟着走')
+    assert.equal(tree.workspace.notesRoot, toPosix(join(rootB, 'notes')), '笔记根也跟着走')
     const saved = JSON.parse(await readFile(join(rootB, '.dsh-notes', 'index.json'), 'utf8'))
     assert.deepEqual(Object.keys(saved.workspaces), [workspaceKeyOf(rootB)], '文件里不该再留旧键')
     assert.equal(JSON.stringify(saved).includes(rootA), false, '新文件里不该残留旧根')
@@ -267,16 +267,16 @@ test('回收站跟着工作区走:文件搬进 <root>/.dsh-notes/.trash,可恢�
   try {
     const note = await service.register({ sessionId: 'session-1', path: join(root, 'notes', '甲.md') })
     const trashed = await service.trashNote({ sessionId: 'session-1', noteId: note.id })
-    assert.equal(trashed.file.startsWith(join(root, '.dsh-notes', '.trash')), true, `回收站要在工作区里:${trashed.file}`)
+    assert.equal(trashed.file.startsWith(toPosix(join(root, '.dsh-notes', '.trash'))), true, `回收站要在工作区里:${trashed.file}`)
     assert.equal(await exists(join(root, 'notes', '甲.md')), false)
 
     const list = await service.listTrash({ sessionId: 'session-1' })
     assert.equal(list.entries.length, 1)
-    assert.equal(list.root, join(root, '.dsh-notes', '.trash'))
+    assert.equal(list.root, toPosix(join(root, '.dsh-notes', '.trash')))
     assert.equal(await service.noteById(note.id), undefined, '索引里不该还留着')
 
     const restored = await service.restoreTrash({ sessionId: 'session-1', id: trashed.id })
-    assert.equal(restored.path, join(root, 'notes', '甲.md'))
+    assert.equal(restored.path, toPosix(join(root, 'notes', '甲.md')))
     assert.equal(await exists(join(root, 'notes', '甲.md')), true, '恢复必须把文件挪回原处')
     assert.notEqual(await service.noteById(restored.note.id), undefined)
 

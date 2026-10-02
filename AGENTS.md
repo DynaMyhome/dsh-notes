@@ -24,6 +24,19 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
    `webServer.register`(自鉴权)、`fs`(守卫式写入)、`workspaceFiles`(只读 Remote)。权威接口面以
    `cordis_inspect_list` / `cordis_inspect_query` 与已安装包的 `lib/types/*.d.ts` 为准。
 
+### 平台约定(改路径 / 文件名之前先读)
+
+**内部只有一种路径写法:一律 `/` 分隔**(`lib/notes.js` 的 `toPosix` / `normalizePath`)。
+`node:path` 的 `join()` 在 Windows 上产出 `\`,所以 `store.js` / `service.js` 里**每个** `join()`
+的结果都要 `normalizePath()` 包一层 —— 少一处,同一个目录就会同时存在两种写法,
+字符串比较与集合键静默失配。**Linux 上测不出来**(那边 join 本来就是 `/`),2026-10-02 在
+Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 都接受 `/`,
+所以归一之后不需要在调用前换回 `\`。
+
+文件名侧同理:`sanitizeFileName()` 已经处理 Windows 保留设备名(含 `CON.md`)、尾随点/空格、
+非法字符与长度上限。三平台的差异、已验证的证据、以及**没有真机**的 macOS 边界见 README 的
+「平台支持」一节;靶子在 `test/platform-paths.test.mjs`(喂 Win32 输入,所以在 Linux 上也照红)。
+
 ## 数据放在哪(改存储前先读)
 
 **语义数据跟着工作区走;机器本地只留派生缓存与"见过哪些工作区"。** 这是本插件的存储契约:
@@ -376,7 +389,7 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
 | `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
-| `test/` | `node --test` 单测(**238 条**):含 `store`(存储纯函数 + **相对路径往返/搬迁**)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`service-scan-time`(**真 version token** 的时间排序)、`service-save-eol`(**行尾保真**)、`service-scan-roots`(扫描根的边界)、`browse-path` / `scan-sort` / `frontmatter`(CRLF 坐标) / `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫) |
+| `test/` | `node --test` 单测(**250 条**):含 `store`(存储纯函数 + **相对路径往返/搬迁**)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`service-scan-time`(**真 version token** 的时间排序)、`service-save-eol`(**行尾保真**)、`service-scan-roots`(扫描根的边界)、`browse-path` / `scan-sort` / `frontmatter`(CRLF 坐标) / `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫)、`platform-paths`(**跨平台路径方言 / 保留设备名靶子**,喂 Win32 输入) |
 
 ## 开发与验证
 

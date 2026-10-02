@@ -71,6 +71,11 @@ export function relativeToRoot(root: string, absolute: string): { ok: true; rel:
 
 /**
  * 面包屑只画到工作区根为止(用户不许从浏览器里走出工作区)。
+ *
+ * 「找到工作区根那一层」用**互相都能相对化**判定,而不是字符串相等 ——
+ * Windows / macOS 的盘符大小写不敏感(`c:\ws` 与 `C:\ws` 是同一个目录),
+ * 官方给的 `crumbs[].path` 与我们会话里的 cwd 未必同一种写法,字符串比会漏掉,
+ * 面包屑就整条不见了(与 {@link relativeToRoot} 同一条规则)。
  * @param root - 工作区根的绝对路径。
  * @param crumbs - 官方给的祖先链(从文件系统根到当前目录)。
  * @returns 从工作区根开始的那一段;当前目录在工作区外时返回空数组。
@@ -78,8 +83,10 @@ export function relativeToRoot(root: string, absolute: string): { ok: true; rel:
 export function crumbsWithin(root: string, crumbs: readonly DirEntryLike[]): DirEntryLike[] {
   const mapped = relativeToRoot(root, String(crumbs[crumbs.length - 1]?.path ?? ''))
   if (!mapped.ok) return []
-  const rootText = String(root ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
-  const index = crumbs.findIndex((crumb) => String(crumb.path ?? '').replace(/\\/g, '/').replace(/\/+$/, '') === rootText)
+  const index = crumbs.findIndex((crumb) => {
+    const path = String(crumb.path ?? '')
+    return relativeToRoot(root, path).ok && relativeToRoot(path, root).ok
+  })
   return index < 0 ? [] : crumbs.slice(index)
 }
 
