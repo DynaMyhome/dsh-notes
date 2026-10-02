@@ -399,7 +399,7 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | 版本线 | v0.5.0(2026-10-01 规范化)→ **v0.5.1**(README 图文版 + 截图声明)→ **v0.5.2**(平台兼容) |
 | tag / Release | 一版一个 annotated tag + GitHub Release,body 取 CHANGELOG 对应段;v0.5.1 / v0.5.2 已于 2026-10-02 补齐 |
 | 对外的发布面 | 不是 npm(`private: true`,从不发布)——**git 仓库本身就是发布面**:README、`docs/images/`、`screenshots.json` |
-| 市场投稿 | [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 的收录材料(条目 YAML + 逐条依据 + 分类依据 + 重拍配方)在工作区 `docs/dsh-notes-市场收录材料.md`(**仓库外**);**尚未提 PR** |
+| 市场投稿 | [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 的收录材料(条目 YAML + 逐条依据 + 分类依据 + 重拍配方)在工作区 `docs/dsh-notes-市场收录材料.md`(**仓库外**);**已于 2026-10-02 提 PR:awesome-dsh-plugin#6389**(fork `Phy-D/awesome-dsh-plugin` 分支 `add-dsh-notes`,只加 `data/plugins/DynaMyhome__dsh-notes.yml`;被打回就推同一分支) |
 
 **`screenshots.json` 是市场契约,别随手改**:1–8 张、路径相对该文件、**不以 `/` 开头、不含 `..`**;
 顺序就是市场详情页的顺序。不声明时市场退化成「从 README 里抓图」,声明了才由我们定顺序。
@@ -424,17 +424,30 @@ npm test                     # = node --experimental-strip-types --test test/*.t
 node scripts/build-graph.mjs # 依赖环检查:必须 cycles: 0
 ```
 
-**`node_modules` 是符号链接,不是装出来的**(本工作区惯例,同 `dsh-explain-sidebar`):
+**依赖一律声明为 `peerDependencies`,范围写区间 —— 这是"别的机器从零装也能用"的唯一保证**
+(v0.6.0 起;原先靠一条指向 profile 的 `node_modules` 符号链接绕过,2026-10-02 已废弃):
 
 ```bash
-ln -s "$DSH_HOME/profiles/<profile>/node_modules" node_modules
+npm install        # 开发/测试用(devDependencies);运行时不需要本目录有 node_modules
+npm test
 ```
 
-原因:插件以 `link:` 装进 profile 后,Node 从**插件的真实路径**解析裸导入,
-找不到 `@deepseek-ai/*`;指向 profile 的 `node_modules` 才有全套 harness 包。
-所以**别在本目录跑 `npm install`** —— 那会生成真的 `node_modules` 并遮蔽符号链接,
-表现为 `dsh-notes (dsh-notes): failed to import`(Host 半整行 inactive)。
-构建工具链因此单独放在 `scripts/`(它有自己的 `package.json`)。
+为什么必须这样做(2026-10-02 在官方 DSH Desktop 上实测的整行 inactive):
+
+- 插件以 `link:` 装进 profile 时,**pnpm 不会安装被链接包的依赖**;host 也只会为
+  **声明在 `peerDependencies`** 里的 `@deepseek-ai/dsh*` 包提供运行时那一份。
+- 于是"import 了却没声明"的包(历史事故:`lib/tool.js` 的 `@deepseek-ai/dsh-tools`)
+  会让模块求值直接失败 → app-boot **静默跳过整个 bundle**(`enabled=true` 但 `fiberPhase=null`,
+  界面上就是"装了却不存在",没有任何报错)。WSL 上曾经"能用",只是因为那条符号链接恰好补齐了它。
+- **范围必须写区间**(如 `>=0.1.0-rc.7 <0.3.0`):官方 peer compatibility gate 只看
+  `@deepseek-ai/dsh*` 前缀,**写死版本换个 dsh 版本就会被静默跳过**。
+- 旧的那条符号链接(`ln -s "$DSH_HOME/profiles/<profile>/node_modules" node_modules`)
+  现在既不需要也有害:它指向 POSIX 路径,在 Windows 上就是断链。
+- 现在 `npm install` 是**支持**的:peer 由 host 占据,本目录真的 `node_modules` 不会遮蔽
+  运行时实例(2026-10-02 实测:真 `node_modules` 下本插件仍 `active`)。
+  构建工具链仍单独放在 `scripts/`(它有自己的 `package.json`)。
+- **回归守卫**:`test/packaging.test.mjs`(随 `npm test` 跑)会拦住"漏声明"与"peer 写死版本"。
+  改任何 import 之后先跑它。
 
 - 装/更新:用 `plugin_manager` 的 `install_bundle`(target = 本目录绝对路径),
   **不要**手写 profile 的 `package.json` / `cordis.patch.yml`,**不要**在 profile 里跑 pnpm。

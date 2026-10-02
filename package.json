@@ -1,6 +1,6 @@
 {
   "name": "dsh-notes",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "DSH 笔记工作区:右侧栏一个独立「笔记」区域(可收起的笔记树 + CodeMirror 6 编辑器),纯 Markdown + 薄索引,按工作区组织",
@@ -53,6 +53,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.7 <0.3.0",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.7 <0.3.0",
     "@deepseek-ai/schemastery": "^3.18.4"
   }
 }

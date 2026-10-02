@@ -3,6 +3,27 @@
 本插件按 [语义化版本](https://semver.org/lang/zh-CN/) 打 tag;`v0.2.0` 是**首个带 tag 的发布**
 (0.1.0 是开发期的初始版本,当时没有打 tag,仓库里也没有 release)。
 
+## v0.6.0 — 从零安装可用:漏声明的 peer + 打包自查(2026-10-02)
+
+**症状(实测)**:在官方 DSH Desktop(0.2.0-rc.2)里,本插件 `enabled=true` 但 `fiberPhase=null`
+——服务端半整行没起来,右侧栏因此**没有「笔记」入口**;同一份代码在 WSL 上却是 active。
+
+**根因**:`lib/tool.js` import 了 `@deepseek-ai/dsh-tools`,但 `package.json` 只声明了
+`cordis` / `schemastery`。插件以 `link:` 装进 profile 时,pnpm 不会装它的依赖,host 也只会为
+**声明在 `peerDependencies`** 里的 `@deepseek-ai/dsh*` 包提供运行时那一份 → 这个 import 抛错 →
+模块求值失败 → app-boot **静默跳过整个 bundle**(无任何报错)。WSL 上之所以"能用",是因为插件
+目录里有一条指向 WSL profile 的 `node_modules` 符号链接恰好补齐了它 —— 那是掩盖,不是修复。
+
+**修复**
+
+- `@deepseek-ai/dsh-tools` 声明为 `peerDependencies`(区间 `>=0.1.0-rc.7 <0.3.0`)。
+  **必须用区间**:官方 peer compatibility gate 只看 `@deepseek-ai/dsh*` 前缀,写死版本换个 dsh
+  版本就会再次被静默跳过。
+- 新增 `test/packaging.test.mjs`(随 `npm test` 跑):①凡 import 的 `@deepseek-ai` 包都必须声明;
+  ②`@deepseek-ai/dsh*` 的 peer 不许写死版本;③发布所需标准文件齐全。
+- 补 `devDependencies`,于是 `npm install && npm test` 在任意机器上都能跑,**不再需要那条符号链接**
+  (该链接在 Windows 上就是断链,指向 POSIX 路径)。
+
 ## v0.5.2 — Windows / macOS 平台兼容:路径方言归一 + 保留设备名 + 跨平台靶子(2026-10-02)
 
 ### 修(都只在 Windows 上才会犯,Linux 上测不出来)
