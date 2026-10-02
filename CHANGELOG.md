@@ -22,6 +22,21 @@
 - 图片放 `docs/images/`,8 张 PNG、1217×1028、合计约 1.1 MB;`package.json.files` 白名单不变
   (`private: true`,本轮不发 npm)。
 
+### 隐私清理(同日补,2026-10-02)
+
+仓库转 public 之后复查了**全部公开文件**,把与本机布局相关的字符串清掉(**只改字符串,不改行为**):
+
+- 本机绝对路径 → 中立写法:`/mnt/<盘>/.../dsh-notes` → `<你克隆 dsh-notes 的目录>`;
+  `/home/<user>/.dsh/profiles/web/node_modules` → `$DSH_HOME/profiles/<profile>/node_modules`;
+  `/mnt/<盘>/...` 这类举例 → 「Windows 盘(`/mnt/*`)」/「很长的磁盘路径」。
+- 涉及:`AGENTS.md`、`README.md`、`CHANGELOG.md`、`src/client/editor/setup.ts` 的注释、
+  `lib/service.js` 的注释,以及 `test/*.mjs` 里当假数据用的绝对路径(`/home/user` → `/home/user`,
+  `/mnt/<盘>/...` → `/data/...`;断言只看"是不是绝对路径",不依赖具体值)。
+- 复核:`npm test` **238 条全绿**、`node scripts/build-graph.mjs` `cycles: 0`、
+  `node --check` 通过;`npm run build` 重建后 `lib/client.js` **逐字节不变**(注释进不了产物)。
+- 仍然保留(有意):`LICENSE` 的作者署名 `Phy-D`、仓库/包名 `DynaMyhome/dsh-notes`、
+  `$DSH_HOME` 这类公开约定的环境变量。
+
 ## v0.5.0 — 插件卡片终于显示「笔记工作区」/ 删掉从不生效的 meta 字段 / 补齐许可证与规范化(2026-10-01)
 
 ### 修
@@ -43,8 +58,8 @@
 
 - **补 `license` / `repository` / `homepage` / `bugs` 字段**与 **`LICENSE` 正文**（MIT © 2026 Phy-D）：
   此前 `package.json` 既没有 `license` 字段、仓库里也没有许可证正文。
-- **新增 `.gitattributes`**（`* text=auto eol=lf` + 二进制保护）：本插件的开发目录在
-  `/mnt/<盘>/...`，工作树被 Windows 侧工具改成 CRLF 时，`git diff` 会整文件重写、真实改动被淹没
+- **新增 `.gitattributes`**（`* text=auto eol=lf` + 二进制保护）：本插件的开发目录挂在
+  Windows 盘（WSL 的 `/mnt/*`）上，工作树被 Windows 侧工具改成 CRLF 时，`git diff` 会整文件重写、真实改动被淹没
   （`dsh-restart-manager` 上实测过 719 增 / 719 删而真实差异为 0）。
 - `files` 白名单：`locale` → `locale/*.json`（与其他插件一致），补 `LICENSE`。
 - 版本 `0.4.0` → `0.5.0`。`private: true` **保留**（只挡 `npm publish`，不影响 `git`/`link:` 安装，
@@ -162,7 +177,7 @@
      递归进去 —— 实测 6530 个 inotify watch 且持续增长、永不 ready,把 WSL 的 drvfs/9p 打满,
      表现是**端口在听但永不应答**(systemd 还显示 active)。只给 `lib/` 是 13 个 watch。
   2. **WSL 的 inotify 看不见 `/mnt/<盘>`(drvfs)**:独立进程实测,改 ext4(`/tmp`、`/home`)能收到
-     `change`,改 `/mnt/<盘>/...` 收不到**任何**事件。所以必须开 `usePolling`
+     `change`，改 Windows 盘（`/mnt/*`）下的目录收不到**任何**事件。所以必须开 `usePolling`
      (chokidar 选项能经 config 透传:`schemastery` 会保留未声明的键,不用给
      `@deepseek-ai/dsh-hmr` 打补丁);`interval: 1000`,实测代价 **+0.5% 单核**。
 

@@ -225,7 +225,7 @@ DSH 的 `设置 → 插件` 列表会给每个插件画一张卡片。卡片的�
 
 ## 热重载（改完不用重启、不用刷新）
 
-本插件的开发目录就在工作区里（`/mnt/<盘>/.../dsh-notes`），profile 用 `link:` 指向它。
+本插件的开发目录可以放在工作区里（例如把仓库克隆进工作区），profile 用 `link:` 指向它。
 前置两件事（一次性）:
 
 1. profile 里是 **`link:`** 挂载（当前 profile 已是）；
@@ -237,7 +237,7 @@ DSH 的 `设置 → 插件` 列表会给每个插件画一张卡片。卡片的�
      config:
        base: <插件目录的父目录>
        root:
-         - '<你克隆 dsh-notes 的目录>/lib'
+         - '<克隆下来的 dsh-notes 目录>/lib'
        # ⚠️ WSL 的 inotify 看不见 /mnt/<盘>（drvfs），必须开轮询
        usePolling: true
        interval: 1000

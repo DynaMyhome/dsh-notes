@@ -160,7 +160,7 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 2. `.dsh-cm-table-wrap { max-width:100%; overflow-x:auto }` + 表格 `width:max-content; min-width:100%`
    —— 窄表格仍铺满(照 Typora),宽表格由**外壳**滚。少了 `max-width:100%` 就会去顶 `.cm-content`。
 3. `.cm-content { overflow-wrap:anywhere }` + `.cm-scroller { overflow-x:hidden }` ——
-   长到没有空格的串(URL、`/mnt/<盘>/...` 路径、长公式)默认**不换行**;这一条是兜底,
+   长到没有空格的串(URL、很长的磁盘路径、长公式)默认**不换行**;这一条是兜底,
    保证正文侧永远没有横向滚动条。
 
 配套两条:
@@ -392,10 +392,10 @@ node scripts/build-graph.mjs # 依赖环检查:必须 cycles: 0
 **`node_modules` 是符号链接,不是装出来的**(本工作区惯例,同 `dsh-explain-sidebar`):
 
 ```bash
-ln -s $DSH_HOME/profiles/<profile>/node_modules node_modules
+ln -s "$DSH_HOME/profiles/<profile>/node_modules" node_modules
 ```
 
-原因:插件以 `link:` 装进 profile 后,Node 从**真实路径**(`/mnt/<盘>/...`)解析裸导入,
+原因:插件以 `link:` 装进 profile 后,Node 从**插件的真实路径**解析裸导入,
 找不到 `@deepseek-ai/*`;指向 profile 的 `node_modules` 才有全套 harness 包。
 所以**别在本目录跑 `npm install`** —— 那会生成真的 `node_modules` 并遮蔽符号链接,
 表现为 `dsh-notes (dsh-notes): failed to import`(Host 半整行 inactive)。
@@ -409,14 +409,14 @@ ln -s $DSH_HOME/profiles/<profile>/node_modules node_modules
     (实测:改一个字典值 → 已打开的页面里文案变了,`rev` 从 `07d32228578e` 变成 `ae363e1ce652`)。
     代价:组件内部 state 会丢,会话/工作区状态不丢。
   - **Host 半**(`lib/*.js`):profile 的 `hmr` 行 `root` 里加了本插件的
-    `'/mnt/<盘>/.../dsh-notes/lib'`,改完约 1 秒自动重新导入并替换插件 fiber,**不用重启**
+    `'<克隆下来的 dsh-notes 目录>/lib'`,改完约 1 秒自动重新导入并替换插件 fiber,**不用重启**
     (实测:临时加一条路由 → 立刻 200;删掉 → 立刻 404;全程 0 重启)。
   - **两个必须知道的边界**(都写进 profile 注释了,别再踩):
     1. `root` **只能给很小的子目录**。给插件根会让 chokidar(默认无限递归 + 跟随软链)递归整个工作区:
        实测 6530 个 inotify watch 且持续增长、永不 ready,把 WSL 的 drvfs/9p 打满,表现是
        **端口在听但永不应答**(systemd 仍显示 active,看起来像"启动不了")。只给 `lib/` 是 13 个 watch。
-    2. **WSL 的 inotify 看不见 `/mnt/<盘>`(drvfs)**:独立进程实测,ext4(`/tmp`、`/home`)能收到 `change`,
-       `/mnt/<盘>/...` 收不到**任何**事件 → 必须开 `usePolling`(chokidar 的选项能经 config 透传,
+    2. **WSL 的 inotify 看不见 Windows 盘(如 `/mnt/<盘>`,drvfs)**:独立进程实测,ext4(`/tmp`、`/home`)能收到 `change`,
+       那类挂载点下的目录收不到**任何**事件 → 必须开 `usePolling`(chokidar 的选项能经 config 透传,
        `schemastery` 会保留未声明的键,不用给 `@deepseek-ai/dsh-hmr` 打补丁);`interval: 1000`,
        实测 +0.5% 单核。
   - 仍然必须重启的:`package.json` / `exports` / 新增依赖 / profile patch 结构变化。

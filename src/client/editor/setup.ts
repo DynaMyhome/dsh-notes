@@ -693,7 +693,7 @@ const theme = EditorView.theme({
     // 内容区 clientWidth 687)。`min-width:0` 让内容区老老实实等于滚动区宽度,
     // 宽表格就交给它自己那个 `overflow-x:auto` 的外壳去滚。
     minWidth: '0',
-    // 长到没有空格的串(URL、`/mnt/<盘>/...` 路径、`$C_{FB,opt}=\dfrac{\sqrt2}{\omega_{CL}R_F}$`)
+    // 长到没有空格的串(URL、很长的磁盘路径、`$C_{FB,opt}=\dfrac{\sqrt2}{\omega_{CL}R_F}$`)
     // 在默认规则下**不换行**,会把正文顶宽 → 整篇左右滚(用户实测)。`anywhere` 允许在
     // 任意位置断开,配合 `.cm-scroller` 的 `overflow-x:hidden`,正文就彻底没有横向滚动条了。
     overflowWrap: 'anywhere',
