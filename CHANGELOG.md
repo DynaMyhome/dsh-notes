@@ -30,8 +30,8 @@
   `/home/<user>/.dsh/profiles/web/node_modules` → `$DSH_HOME/profiles/<profile>/node_modules`;
   `/mnt/<盘>/...` 这类举例 → 「Windows 盘(`/mnt/*`)」/「很长的磁盘路径」。
 - 涉及:`AGENTS.md`、`README.md`、`CHANGELOG.md`、`src/client/editor/setup.ts` 的注释、
-  `lib/service.js` 的注释,以及 `test/*.mjs` 里当假数据用的绝对路径(`/home/user` → `/home/user`,
-  `/mnt/<盘>/...` → `/data/...`;断言只看"是不是绝对路径",不依赖具体值)。
+  `lib/service.js` 的注释,以及 `test/*.mjs` 里当假数据用的绝对路径(改成 `/home/user`、
+  `/data/...` 这类中性值;断言只看"是不是绝对路径",不依赖具体值)。
 - 复核:`npm test` **238 条全绿**、`node scripts/build-graph.mjs` `cycles: 0`、
   `node --check` 通过;`npm run build` 重建后 `lib/client.js` **逐字节不变**(注释进不了产物)。
 - 仍然保留(有意):`LICENSE` 的作者署名 `Phy-D`、仓库/包名 `DynaMyhome/dsh-notes`、
