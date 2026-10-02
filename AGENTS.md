@@ -391,6 +391,28 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
 | `test/` | `node --test` 单测(**250 条**):含 `store`(存储纯函数 + **相对路径往返/搬迁**)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`service-scan-time`(**真 version token** 的时间排序)、`service-save-eol`(**行尾保真**)、`service-scan-roots`(扫描根的边界)、`browse-path` / `scan-sort` / `frontmatter`(CRLF 坐标) / `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫)、`platform-paths`(**跨平台路径方言 / 保留设备名靶子**,喂 Win32 输入) |
 
+## 发布、仓库与市场(改仓库外观 / 发版前先读)
+
+| 事实 | 值 |
+| --- | --- |
+| 仓库 | `DynaMyhome/dsh-notes` —— **2026-10-02 起 public**,已加 `dsh-plugin` topic |
+| 版本线 | v0.5.0(2026-10-01 规范化)→ **v0.5.1**(README 图文版 + 截图声明)→ **v0.5.2**(平台兼容) |
+| tag / Release | 一版一个 annotated tag + GitHub Release,body 取 CHANGELOG 对应段;v0.5.1 / v0.5.2 已于 2026-10-02 补齐 |
+| 对外的发布面 | 不是 npm(`private: true`,从不发布)——**git 仓库本身就是发布面**:README、`docs/images/`、`screenshots.json` |
+| 市场投稿 | [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 的收录材料(条目 YAML + 逐条依据 + 分类依据 + 重拍配方)在工作区 `docs/dsh-notes-市场收录材料.md`(**仓库外**);**尚未提 PR** |
+
+**`screenshots.json` 是市场契约,别随手改**:1–8 张、路径相对该文件、**不以 `/` 开头、不含 `..`**;
+顺序就是市场详情页的顺序。不声明时市场退化成「从 README 里抓图」,声明了才由我们定顺序。
+重拍配方在那个材料文件里(视口 1920×1080、右栏拖到面板左缘 `x=703`、裁 `(703,0,1920,1028)`、
+中文界面、回收站面板里那行绝对路径要抹掉)。
+
+**隐私门禁(2026-10-02 立)**:tracked 文件里**不许**出现本机绝对路径、用户名、真机主机名或 tailnet 域名。
+要举例就写 `<你克隆 dsh-notes 的目录>`、`$DSH_HOME/profiles/<profile>/node_modules`、`/mnt/<盘>/…`。
+这条不是洁癖:仓库公开当天复查,在文档、注释与测试假数据里共 9 个文件命中本机路径,
+当场清掉并**用 `git filter-repo` 重写了全部历史 + 强推**(新历史从 `5b90a07` 起)。
+于是:**`5b90a07` 之前的 commit SHA 在远端已经不存在**,别再引用旧 SHA;更早的克隆与远端分叉。
+补救顺序是:先清工作树 → 再 `filter-repo` 重写 → 强推 → 通知协作者重新克隆。
+
 ## 开发与验证
 
 ```bash

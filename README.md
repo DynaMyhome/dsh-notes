@@ -196,6 +196,8 @@ P0–P4 全部落地,存储改造完成(`node --test test/*.test.mjs` **250** �
 | P4 | 跨工作区映射角标 / 图片粘贴 / `[[wikilink]]` / 代码卡片 / 真表格 / 公式 / 回收站 | ✅ |
 | v0.4.0 | 纳入管理**点选目录** + 排序(时间/名称/路径/大小)+ 分类**重命名/删除** + CRLF 笔记打不开与行尾保真的修复 + 索引改记**相对路径** | ✅ |
 | v0.5.0 | 卡片显示「笔记工作区」(locale 形状修正 + 删掉从不生效的 `package.json.meta`)、补 `LICENSE`/`.gitattributes`/`repository` 等 | ✅ |
+| v0.5.1 | README 图文版(8 张真实界面截图 + 页首 hero + 「界面预览」)+ `screenshots.json` 市场截图声明 + 隐私清理(公开文件里的本机路径清零、git 历史重写) | ✅ |
+| v0.5.2 | 平台兼容:内部路径方言归一、Windows 保留设备名、跨平台靶子(Windows 真机 208 条全绿) | ✅ |
 
 项目规则与硬不变量见 [`AGENTS.md`](AGENTS.md);本项目已启用 project-context 长期记忆(`.agent-context/`)。
 
