@@ -16,10 +16,9 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 
 import { isSourceMode } from './mode'
 import { renderCell } from './cell-render'
+import { parseInlineMarkdown } from './inline-parse'
 import { isDelimiterRow, parseTable, type TableModel } from './table-model'
 import { frontmatterEndOf } from './frontmatter'
-import { markdownLanguage } from '@codemirror/lang-markdown'
-import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
 import { jsxLanguage, tsxLanguage, javascript, javascriptLanguage, typescriptLanguage } from '@codemirror/lang-javascript'
 import { json, jsonLanguage } from '@codemirror/lang-json'
 import { python, pythonLanguage } from '@codemirror/lang-python'
@@ -29,8 +28,9 @@ import temml from 'temml'
 /** 一个单元格:文本 + 它在**文档中的绝对范围**。 */
 /** 单元格里的行内 markdown 单独解析 —— 必须用**配置过自定义语法**的解析器
  * (`[[双链]]` / `==高亮==` / `$公式$` 都是自研 lezer 节点,裸 parser 认不出来;
- * 这是项目里踩过的第四条硬规则:单测与运行时都要用同一个 parser)。 */
-const parseCellMarkdown = (source: string): unknown => markdownLanguage.parser.configure(markdownSyntaxConfig()).parse(source)
+ * 这是项目里踩过的第四条硬规则:单测与运行时都要用同一个 parser)。
+ * 解析器本身收敛在 `./inline-parse`(图题与回退层共用同一个单例)。 */
+const parseCellMarkdown = parseInlineMarkdown
 
 /** 当前打开的单元格输入框(切换单元格时用来避免互相抢焦点)。 */
 const openCellInputs = new Set<HTMLInputElement>()

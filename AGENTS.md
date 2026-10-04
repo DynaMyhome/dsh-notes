@@ -8,6 +8,8 @@ DSH 的**笔记工作区**插件:右侧栏一个独立「笔记」区域(内部 
 1. **永不删除、永不移动用户的 `.md`。** 插件只做三种写入:保存笔记内容(守卫式,带
    `expectedVersion`)、新建笔记文件、写资产文件。文件级删除/移动/改名仍归文件树与
    Agent 的通用文件工具。UI 里的「移除」= 只删索引条目。
+   **插件自己的数据**(薄索引 / 回收站 / 历史快照)只写在 `<工作区>/.dsh-notes/` 里
+   —— 那是插件数据目录(点开头、两个 walker 都跳过),不是用户的 `.md`。
    **两处例外,都只在用户显式动作下发生**(代码里都有注释):
    - **改名**:右键「重命名」/ 新建后行内改名 → 同目录 `rename`,目标已存在则拒绝(绝不覆盖);
    - **删除 = 移入回收站**:右键「Delete (move to trash)」→ 文件挪到
@@ -48,6 +50,7 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | 图片资产 | `<root>/.dsh-assets/<noteId>/` | 工作区数据 |
 | **薄索引**(分类树 / 归属 / 忽略 / 置顶 / 最近 / `refs` / 扫描范围 / 笔记根覆盖) | **`<root>/.dsh-notes/index.json`** | 可重建(rescan),但**人工组织只在这里** |
 | **回收站**(文件本体 + `trash.json`) | **`<root>/.dsh-notes/.trash/`** | 工作区数据 |
+| **历史快照**(`history.json` + `<noteId>/<时间戳>.md`) | **`<root>/.dsh-notes/.history/`** | 工作区数据(有界:默认每篇 50 条,超出从最旧裁) |
 | 自忽略文件 | `<root>/.dsh-notes/.gitignore`(内容 `*`) | 让插件数据不进用户的 `git status` |
 | 扫描缓存 `relPath → {v,s,id}` | `$DSH_HOME/knowledge/index/<workspaceKey>.json` | 派生数据(删了只影响扫描速度) |
 | 已知工作区根表 | `$DSH_HOME/knowledge/workspaces.json` | 机器状态(切换器列表 + `lastUsedAt`) |
@@ -203,6 +206,61 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
   当成**真实的编辑**读回文档(实测:塞一个 `test` 节点 = 文档多 12 个字符并触发自动保存)。
   要量 CSS 就把测试节点挂到 **`.cm-scroller`**(它不在 contenteditable 里)或干脆用离线页面。
 
+## 历史快照与写前钩子(v0.7.0 起;改这块前先读)
+
+目标只有三个:**agent 改坏了能回到改之前**、能翻几个旧版本、**不干扰 Markdown 正常读写**。
+
+### 捕获点只有两个(+ 一个用户动作)
+
+| 捕获点 | 代码 | origin | 覆盖 |
+| --- | --- | --- | --- |
+| `tools/execute` 写前钩子 | `lib/index.js` → `service.captureBeforeToolWrite` | `agent` | agent 的 `write`/`edit`(每次落盘**之前**读走即将被覆盖的内容) |
+| 扫描观察 | `service.captureScannedNotes`(`runScan` 末尾) | `external` / 第一次为 `baseline` | Obsidian / Typora / vim / `bash` 重定向 / 别的窗口 / 插件自己的保存 |
+| 恢复前 | `service.restoreHistory` 写盘前 | `restore` | 让"恢复"本身也能再撤销 |
+
+登记一篇笔记时也会记一条 `baseline`(`service.captureBaseline`)—— 没有它,第一次**外部**改动
+就没得回退(agent 那条有写前钩子兜着)。
+
+- **去重靠内容 sha1**(`lib/history.js` 的 `upsertEntry`):同一份内容被多个点看到只留一条,
+  所以 `agent 写前 → 扫描 → 保存 → 扫描` 不会长出重复条目。
+- **有界**:`historyMaxPerNote`(默认 50),超出从最旧裁,永远保留最新一条;单条上限 2MB(超出不记)。
+- **串行化**:`service.historyChain` 把"读索引 → 追加 → 写索引"串起来,连写不会互相覆盖。
+
+### `tools/execute` 为什么必须在 `next()` 之前、而且必须放行
+
+- 它是**环绕分发**的 waterfall:`ctx.waterfall(carrier, 'tools/execute', exec, () => dispatchToolBody(exec))`
+  —— 监听者在 `next()` 之前跑,读到的就是"即将被覆盖掉的那一份内容"。
+- 插件级(未打 scope 标签)的监听者按 `@deepseek-ai/dsh-scope` 的规则**全局放行**
+  (`scopeTarget` 的 filter:`scopeOf(ctx) === undefined → return true`),所以主 agent / 子 agent /
+  workflow 的调用都收得到。
+- **三条纪律(违反任何一条都是"打断 agent 的写入"级别的事故)**:
+  1. 不碰 `exec`(只读 `name` / `arguments` / `agent`);
+  2. **无论快照成功、失败还是超时,都必须 `return next()`** —— 在 `next()` 之前抛错会被
+     `dispatchScheduledExecution` 的 catch 变成 `toolErrorResult`,等于工具失败;
+  3. 快照是"锦上添花":写不进去只 warn(`captureHistory` 自己吃掉异常),笔记该改还是改。
+- 钩子自带 1.5s 期限(`lib/index.js` 的 `withDeadline`,永不 reject):慢也不能拖慢写入。
+- **不跳过嵌套调用**(`exec.parent` 存在也是真实写入,例如 Code Mode 子分发),重复靠 hash 去重。
+- 明确**不用** `fs/write-intent` / `fs/edit-intent`:那两个是**单槽决策**(官方用它定行尾/版本),
+  插件抢占会打架。
+
+### 一键撤销的语义(别改成"倒数第二条")
+
+`predecessorOf(history, noteId, currentVersion)` = 从新到旧,第一条 `version !== 当前磁盘版本`
+的 entry。写前快照记的是**写之前的版本**,扫描补记的"当前状态"那条会被跳过 —— 所以 agent 连写
+`V1→V2→V3→V4` 之后点「撤销这次外部改动」命中的正是 **V3**(这次修改之前),与补了几条无关。
+用**插入顺序**取"最新",只用 `version` 做相等判断(provider 的版本号里是 mtime/ctime,不保证单调)。
+
+### 外部改动实时同步(为什么是轮询,不是 SSE)
+
+- 客户端每 1.5s `POST /dsh-notes/stat`(只 `stat`、不读正文,一次问完本布局所有打开标签),
+  按"页面可见 + 这个 tab 在显示"门控;干净就静默重载(保留光标/滚动)、脏就弹既有冲突横幅。
+- 不引 SSE/WebSocket 的理由:① 写前钩子只覆盖**工具**写入,Obsidian / vim / bash 都不经过它,
+  要覆盖它们无论如何都得有第二个机制 —— 那正好就是轮询;② 本插件的路由是自鉴权纯 HTTP,
+  没有推送通道,而 `fs.watch` 在 WSL/drvfs 上实测收不到事件;③ 轮询复用了既有 4s 树轮询那套
+  门控/单定时器写法,零新基础设施。
+- 两个"不要误报"的护栏:`savingRef`(保存飞行中跳过)与 `beaconTextRef`(还有一次 beacon 写入
+  没被认领时跳过)。
+
 ## 身份、标题与多文档
 
 - **标题 = 文件名**(Obsidian 模型)。正文里的 H1 只是正文,`[[链接]]` 也按文件名解析。
@@ -331,6 +389,15 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
   `test/locale-guard.test.mjs` 会拦住以后再硬编码中文。
 - **索引落盘**(2026-10-01 修):内容没变不写盘(以前每 ~8s 整份重写一次,因为 4s 轮询每次都刷
   `lastUsedAt`);一次写失败不再毒化后续(以前索引从此只活在内存里)。
+- **历史回退 + 外部改动实时同步 + 图题公式**(v0.7.0):
+  - **写前快照**:`tools/execute` 钩子在 agent 的 `write`/`edit` **落盘之前**留一份
+    "即将被覆盖的内容"(细节与三条纪律见下面「历史快照与写前钩子」那节);
+  - **实时同步**:客户端每 1.5s `POST /stat`(只 stat 不读正文)→ 干净就静默重载(保留光标/滚动)、
+    脏就弹既有冲突横幅、文件不在就常驻提示 —— **没有 SSE/WebSocket**,理由见那节;
+  - **历史版本面板**:编辑器固定右簇的「历史版本」按钮 + 树右键「历史版本…」,列表 / 原文预览 /
+    二次确认恢复;冲突横幅里有可回退历史时多一个「撤销这次外部改动」;
+  - **图题公式**:图片 alt(图题)与表格单元格走同一套行内渲染(公式走 Temml),
+    `$A$` 不再显示成原文 —— 解析器单例在 `editor/inline-parse.ts`。
 - **窗口:** 侧栏 tab 的 chip 是「图标 + Notes」(`sidebar.right.pane.tab.title` 座位)。
 
 ## 位置决定(已实测,别再翻)
@@ -354,17 +421,19 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | `lib/notes.js` | 纯函数:路径 / frontmatter / 标题(=文件名)/ glob 匹配 / **`mtimeOfVersion`(版本号 → mtime)** / **`detectEol`·`applyEol`·`normalizeEol`** / `relativeToWorkspace` |
 | `lib/routes.js` | 内容路由 `/dsh-notes/*`(全部接受 `workspaceKey`) |
 | `lib/tool.js` | `knowledge` 工具的两个 op 面 |
+| `lib/history.js` | **历史快照的纯逻辑**:去重(`upsertEntry`)/ 裁剪 / **`predecessorOf`(按 `version` 找"当前内容之前那一次")** / 文件名形状校验(防目录穿越);单测 `test/history.test.mjs` |
 | `lib/markdown-render.js` | **渲染决策层(纯函数)**,单测 `test/markdown-render.test.mjs` |
 | `lib/markdown-syntax.js` | 自定义行内语法(高亮 / 双链 / 公式)的 lezer 注册 |
 | `lib/outline.js` / `lib/section.js` | 大纲解析 / 章节搬移(纯函数,有单测) |
 | `lib/client.js` | **构建产物**,勿手改(`npm run build`) |
 | `src/client/main.tsx` | 侧栏注册、错误边界、i18n(zh/en 两份字典要同步加键) |
-| `src/client/NotesPane.tsx` | 区域外壳:工作区切换、树、4s 轮询(按 `tab.visible` 门控)、布局(`tabs`)、字号缩放状态 |
+| `src/client/NotesPane.tsx` | 区域外壳:工作区切换、树、4s 轮询(按 `tab.visible` 门控)、**1.5s 外部版本探针(`probeExternal`)**,布局(`tabs`)、字号缩放状态 |
 | `src/client/scale.ts` | 字号/图标缩放的**纯模型**(偏好读写/夹取 + `cssSize()` 公式),单测 `test/scale.test.mjs` |
 | `src/client/ScaleControl.tsx` | 标题栏的 `Aa` 按钮 + 浮层(预设 / 滑块 / 复位) |
 | `src/client/editor/tabs.ts` | 标签/分栏**纯模型**(打开/关闭/移栏/持久化),单测 `test/tabs.test.mjs` |
 | `src/client/EditorArea.tsx` / `TabStrip.tsx` | 分栏渲染、标签条、拖动换栏(切回可见/改字号时 `requestMeasure`) |
-| `src/client/EditorPane.tsx` | 单篇编辑器外壳:**载入 / 切模式重建、守卫式保存 + 卸载 flush + beacon、工具栏(固定右簇)、表格右键、装饰文案** |
+| `src/client/EditorPane.tsx` | 单篇编辑器外壳:**载入 / 切模式重建、守卫式保存 + 卸载 flush + beacon、工具栏(固定右簇)、表格右键、装饰文案**;**外部改动自动同步(干净静默重载 / 脏冲突横幅 / 文件不在提示)**、历史版本入口 |
+| `src/client/HistoryPanel.tsx` | 历史版本面板(列表 / 原文预览 / 二次确认恢复);恢复结果**直接装进编辑器**,不经过保存 |
 | `src/client/editor/click-hit.ts` | 点击落点**纯函数**(视觉行夹取 + 行内二分),单测 `test/click-hit.test.mjs` |
 | `src/client/TreePane.tsx` | 笔记树(拖拽载荷:`x-dsh-note-id` / `x-dsh-note-title` / `text/plain` = `[[标题]]`) |
 | `src/client/CandidatesPanel.tsx` | 纳入管理面板(最近 / 文件夹 / 已忽略 + 排序 + 扫描范围;**目录选择入口**) |
@@ -377,7 +446,8 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | `src/client/editor/decorate.ts` | 行内装饰 ViewPlugin(`safeBuild` 兜底) |
 | `src/client/editor/table.ts` | 块级 StateField(chip / 表格 / 代码卡 / 公式)+ `tableTab`;**单元格用决策层渲染行内 markdown** |
 | `src/client/editor/cell-inline.ts` | 单元格的**行内节点模型**(纯函数:扁平区间 → 嵌套树),单测 `test/cell-inline.test.mjs` |
-| `src/client/editor/cell-render.ts` | 节点树 → DOM(公式走 Temml;认不出的 widget 退回原文) |
+| `src/client/editor/cell-render.ts` | 节点树 → DOM(公式走 Temml;认不出的 widget 退回原文);**图题(图片 alt)也走它** |
+| `src/client/editor/inline-parse.ts` | **行内 markdown 解析器单例**(`markdownLanguage.parser.configure(markdownSyntaxConfig())`):表格单元格 / 图题 / 回退装饰层共用,别再各写一份 |
 | `src/client/editor/selection.ts` | 选区包裹的纯逻辑(**必须用 `EditorSelection.range`**) |
 | `src/client/editor/table-model.ts` / `blocks.ts` / `reference.ts` | 纯模型:表格解析 / **表内插删行列(`applyTableAction`)** / 块级插入规划 / 引用载荷 |
 | `src/client/editor/media.ts` | 媒体地址工具(单独成模块是为打断 `decorate ⇄ setup` 循环依赖) |
@@ -389,7 +459,7 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
 | `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
-| `test/` | `node --test` 单测(**250 条**):含 `store`(存储纯函数 + **相对路径往返/搬迁**)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`service-scan-time`(**真 version token** 的时间排序)、`service-save-eol`(**行尾保真**)、`service-scan-roots`(扫描根的边界)、`browse-path` / `scan-sort` / `frontmatter`(CRLF 坐标) / `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫)、`platform-paths`(**跨平台路径方言 / 保留设备名靶子**,喂 Win32 输入) |
+| `test/` | `node --test` 单测(**274 条**):含 `store`(存储纯函数 + **相对路径往返/搬迁**)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`service-scan-time`(**真 version token** 的时间排序)、`service-save-eol`(**行尾保真**)、`service-scan-roots`(扫描根的边界)、`browse-path` / `scan-sort` / `frontmatter`(CRLF 坐标) / `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫)、`platform-paths`(**跨平台路径方言 / 保留设备名靶子**,喂 Win32 输入)、`history`(历史纯逻辑)、`service-history`(**V1→V2→V3→V4 连写 / 去重 / 扫描兜底 / 越界文件名 / 超大文件**)、`index-hook`(**装配契约:钩子必须放行 `next()`、读盘失败也不能打断写入**)、`service-stat`(版本探针) |
 
 ## 发布、仓库与市场(改仓库外观 / 发版前先读)
 
@@ -448,6 +518,12 @@ npm test
   构建工具链仍单独放在 `scripts/`(它有自己的 `package.json`)。
 - **回归守卫**:`test/packaging.test.mjs`(随 `npm test` 跑)会拦住"漏声明"与"peer 写死版本"。
   改任何 import 之后先跑它。
+- ⚠️ **`scripts/node_modules` 里只装了 `@esbuild/linux-x64` 时,Windows 上 `npm run build` 会直接报
+  "You installed esbuild for another platform"**(2026-10-04 实测:那份工具链是在 WSL 侧 `npm install`
+  的)。修法是**再加一份对应平台的**平台包(别删另一份,两侧共用同一个目录):
+  `npm install --prefix <临时目录> @esbuild/win32-x64@<与 esbuild 同版本>` 然后把它拷进
+  `scripts/node_modules/@esbuild/`(esbuild 0.28.2 → `@esbuild/win32-x64@0.28.2`)。
+  版本必须与 `scripts/node_modules/esbuild/package.json` 一致,否则 host JS 与二进制握手失败。
 
 - 装/更新:用 `plugin_manager` 的 `install_bundle`(target = 本目录绝对路径),
   **不要**手写 profile 的 `package.json` / `cordis.patch.yml`,**不要**在 profile 里跑 pnpm。
@@ -459,6 +535,19 @@ npm test
   - **Host 半**(`lib/*.js`):profile 的 `hmr` 行 `root` 里加了本插件的
     `'<克隆下来的 dsh-notes 目录>/lib'`,改完约 1 秒自动重新导入并替换插件 fiber,**不用重启**
     (实测:临时加一条路由 → 立刻 200;删掉 → 立刻 404;全程 0 重启)。
+  - ⚠️ **2026-10-04 在官方 DSH Desktop 的 `desktop` profile 上实测:这条 Host 热重载已经没了** ——
+    `cordis.patch.yml` 里只剩下那段说明注释,**没有 `- id: hmr` 这个 patch 条目**,
+    而 `cordis.yml` 的 `hmr` 是 `config.root: []`(空)。表现:改 `lib/*.js` 后
+    `Config.listConfigs(name=dsh-notes)` 的 schema 仍是旧的(新配置项不出现)、新路由 404 ——
+    **Host 半必须重启 App 才生效**。
+    **客户端半在桌面壳下也不可靠**:迁移记录里实测 `dsh-client-hmr` 的 EventSource
+    (`dsh-app://app/plugins/events`)在桌面壳下取不到 → 页面不会收到新 `rev`
+    (见 `archive/ops/DSH-桌面版迁移与插件规范化-2026-10-02.md` 第 3 节)。
+    所以桌面版上**改完客户端也要刷一次页面**(`npm run build` 之后)。
+    2026-10-04 已往 profile 的 `cordis.patch.yml` 补回 `- id: hmr` + `root: ['<dsh-notes>/lib']`
+    + `usePolling: false`(Windows 原生 NTFS;改完**先用 js-yaml + `!!js` 标量 schema 离线解析
+    校验**再重启 —— 解析失败会让 app-boot 起不来)。若该条目在插件列表里显示 `failed`,
+    删掉这一段即回到"桌面版默认 hmr"。
   - **两个必须知道的边界**(都写进 profile 注释了,别再踩):
     1. `root` **只能给很小的子目录**。给插件根会让 chokidar(默认无限递归 + 跟随软链)递归整个工作区:
        实测 6530 个 inotify watch 且持续增长、永不 ready,把 WSL 的 drvfs/9p 打满,表现是

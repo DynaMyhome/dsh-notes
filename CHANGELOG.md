@@ -3,6 +3,71 @@
 本插件按 [语义化版本](https://semver.org/lang/zh-CN/) 打 tag;`v0.2.0` 是**首个带 tag 的发布**
 (0.1.0 是开发期的初始版本,当时没有打 tag,仓库里也没有 release)。
 
+## v0.7.0 — 历史回退 + 外部改动实时同步 + 图题公式(2026-10-04)
+
+三件事:agent 改坏了能**精确回到改之前**、agent 改完**用户这边立刻看到**、图题里的公式
+不再显示成 `$A$` 原文。
+
+### 1. 历史回退:agent 写前快照(核心)
+
+**为什么不能只靠扫描**:`reconcile` 有 3s 冷却、`markDirty` 400ms 去抖、TTL 8s —— agent
+在一次扫描周期里连写 `V1→V2→V3→V4`,只靠事后扫描只能看到首尾,中间状态会丢。
+
+**做法**:注册 `tools/execute` 写前钩子(`lib/index.js` → `service.captureBeforeToolWrite`)。
+DSH 的 `tools/execute` 是**环绕分发**的 waterfall
+(`ctx.waterfall(carrier, 'tools/execute', exec, () => dispatchToolBody(exec))`),监听者在
+`next()` 之前跑,读到的正是"即将被覆盖掉的那一份内容"。插件级(未打 scope 标签)的监听者
+按 `@deepseek-ai/dsh-scope` 的规则**全局放行**,所以主 agent / 子 agent / workflow 的写入
+都收得到。
+
+- 数据在 `<工作区>/.dsh-notes/.history/`(跟着工作区走、不进 git status、不被扫描):
+  `history.json` + `<noteId>/<时间戳>.md`;`historyMaxPerNote`(默认 50)条,超出从最旧裁。
+- 捕获点**只有两个** + 一个用户动作:写前钩子(`agent`)、扫描观察(`external`/`baseline`,
+  覆盖 Obsidian / vim / bash / 别的窗口)、恢复前的当前内容(`restore`)。
+- **内容 hash 去重**:同一次改动被两个点看到也只留一条;`agent 写前 → 扫描 → 保存 → 扫描`
+  不会长出重复条目。
+- **「撤销这次外部改动」精确对应"这次修改之前"**:`predecessorOf` 按 entry 的 `version`
+  找"从新到旧第一条 `version !== 当前磁盘版本`"——不是"倒数第二条"。写前钩子记的正是
+  **写之前的版本**,所以 agent 连写也不会错位。
+- 界面:编辑器右侧固定簇的「历史版本」按钮 + 笔记树右键「历史版本…」;列表(时间/来源/大小)
+  + 原文预览 + 二次确认恢复;冲突横幅里多一个「撤销这次外部改动」(有可回退的历史才显示)。
+- 写前钩子**永不抛**:任何异常都只是"这次没记",并且**无论成败都 `return next()`** ——
+  在 `next()` 之前抛错会被 tools 的调度层变成工具失败,等于打断 agent 的写入。
+
+### 2. 外部改动实时同步(照 Typora)
+
+- 新路由 `POST /dsh-notes/stat`:只 `stat`、不读正文,一次问完本布局所有打开标签。
+- 客户端每 1.5s 探一次(`NotesPane.probeExternal`,按"页面可见 + 这个 tab 在显示"门控):
+  - 编辑器**干净** → 静默重载(保留光标与滚动位置),这就是"立刻看到";
+  - 有**未保存的编辑** → 只弹既有冲突横幅(重新载入 / 用我的覆盖 / 撤销这次外部改动),
+    绝不静默覆盖用户输入;
+  - 文件**不在了** → 常驻一条提示,不销毁编辑器。
+- 两个"不要误报"的护栏:保存飞行中(`savingRef`)跳过;还有一次 beacon 写入没被认领
+  (`beaconTextRef`)时跳过。
+- **明确不做 SSE / WebSocket**:钩子只覆盖 *工具* 写入(Obsidian / vim / bash 都要另想办法),
+  本插件也没有推送通道,而 `fs.watch` 在 WSL/drvfs 上实测收不到事件 —— 轮询是这里唯一
+  既简单又对所有写入者一致的方案。
+
+### 3. 图题(图片 alt)里的公式
+
+`ImageWidget` 的 caption 以前是 `caption.textContent = alt`,于是论文图注的典型写法
+`![图 4 纳米孔源 + 运放 $A$ + 单位增益 buffer $A_1$](…)` 里的 `$A$` 永远显示成原文。
+现在图题与表格单元格走**同一套**决策层 + 渲染器(公式走 Temml),加粗/行内码也跟着渲染;
+`img.alt` 仍保留原文(无障碍)。行内解析器收敛成单例(`editor/inline-parse.ts`)。
+
+### 新增配置
+
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| `history` | `true` | 关掉 = 完全不做额外读写(逃生开关) |
+| `historyMaxPerNote` | `50` | 每篇保留多少条历史(超出从最旧裁) |
+
+### 测试
+
+274 条(新增 `history`(纯逻辑)/ `service-history`(真文件:V1→V2→V3→V4 连写、
+去重、扫描兜底、越界文件名、超大文件)/ `index-hook`(装配契约:钩子必须放行 `next()`、
+读盘失败也不能打断写入)/ `service-stat` / 路由 + 图题公式靶子)。
+
 ## v0.6.0 — 从零安装可用:漏声明的 peer + 打包自查(2026-10-02)
 
 **症状(实测)**:在官方 DSH Desktop(0.2.0-rc.2)里,本插件 `enabled=true` 但 `fiberPhase=null`

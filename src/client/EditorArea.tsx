@@ -67,6 +67,18 @@ export interface EditorAreaProps {
   /** 每栏的源码/预览模式(分屏时各管各的)。 */
   sourceModeByPane: Record<'p1' | 'p2', boolean>
   onToggleSourceMode: (id: 'p1' | 'p2') => void
+  /**
+   * 各标签的**磁盘版本号**(外壳每 1.5s 探一次;见 `NotesPane.probeExternal`)。
+   *
+   * 键 = 笔记绝对路径;`null` = 文件不在了;缺键 = 还没探到(不处理)。
+   * 编辑器据此做"干净就静默重载、脏就冲突横幅"的外部改动同步。
+   */
+  externalVersions: Record<string, string | null>
+  /**
+   * 「打开历史面板」的信号(树右键 →「历史版本…」)。只有**这篇笔记那一栏的编辑器**
+   * 会处理它(见下面的 `historyRequest` 过滤)。
+   */
+  historyRequest: { noteId: string; nonce: number } | null
 }
 
 /** 标签 → EditorPane 需要的 TreeNote(标签只存最小字段,别的用默认值补)。 */
@@ -242,6 +254,12 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
                 jumpTo={props.jumpTo}
                 sourceMode={props.sourceModeByPane[pane.id] === true}
                 onToggleSourceMode={() => props.onToggleSourceMode(pane.id)}
+                // 外部改动同步:版本号由外壳探(一次问完两栏所有标签),这里按标签下发;
+                // 只有**本栏活动标签**处理(隐藏标签等切回来时再对一次,不抢焦点)。
+                externalVersion={props.externalVersions[tab.path]}
+                active={tab.key === pane.active}
+                // 只有这篇笔记的那一栏才收到"打开历史面板"的信号(nonce 变了就弹一次)
+                historyRequest={props.historyRequest !== null && props.historyRequest.noteId === tab.noteId ? props.historyRequest : null}
                 // 分屏时只有聚焦栏的活动标签显示工具栏(工具作用于聚焦的那一份笔记)
                 showToolbar={pane.id === props.activePane && tab.key === pane.active}
               />

@@ -276,6 +276,82 @@ export async function readNote(
   return call('read', { sessionId, path })
 }
 
+/**
+ * 版本探针(外部改动自动同步用):只 stat、不读正文。
+ *
+ * 客户端每 1.5s 把**本布局所有打开标签**的路径一次问完;返回的键与入参字符串
+ * 一一对应,`null` = 文件不存在/不在本工作区(界面显示"已被移动或删除")。
+ * @param paths - 绝对路径列表(上限 64 条,超出被 Host 截断)。
+ */
+export async function statNotes(sessionId: string, paths: string[]): Promise<Record<string, string | null>> {
+  const result = await call<{ versions: Record<string, string | null> }>('stat', { sessionId, paths })
+  return result.versions ?? {}
+}
+
+/** 历史快照的一条(界面列表用)。 */
+export interface HistoryEntry {
+  /** 快照文件名(相对 `<工作区>/.dsh-notes/.history/`,恢复/预览都点名它)。 */
+  file: string
+  /** 记录时间(毫秒)。 */
+  at: number
+  /** 内容 sha1(去重用;界面不显示)。 */
+  hash: string
+  /** 字节数(界面显示)。 */
+  size: number
+  /** **这份内容对应的磁盘版本** —— 「撤销这次改动」靠它定位。 */
+  version: string
+  /** 来源徽章:`baseline` 基线 / `agent` agent 写前 / `external` 磁盘观察 / `restore` 恢复前。 */
+  origin: string
+}
+
+/** 某篇笔记的历史条目(从新到旧)。 */
+export async function fetchHistory(
+  sessionId: string,
+  noteId: string,
+): Promise<{ noteId: string; rel: string; version: string; entries: HistoryEntry[] }> {
+  const query = new URLSearchParams({ sessionId, noteId })
+  if (activeWorkspaceKey !== null) query.set('workspaceKey', activeWorkspaceKey)
+  const response = await fetch(`${PREFIX}/history?${query.toString()}`, { credentials: 'same-origin' })
+  return (await unwrap(response)) as { noteId: string; rel: string; version: string; entries: HistoryEntry[] }
+}
+
+/** 读一条历史快照的正文(预览用)。 */
+export async function readHistoryEntry(
+  sessionId: string,
+  noteId: string,
+  file: string,
+): Promise<{ file: string; text: string }> {
+  const query = new URLSearchParams({ sessionId, noteId, file })
+  if (activeWorkspaceKey !== null) query.set('workspaceKey', activeWorkspaceKey)
+  const response = await fetch(`${PREFIX}/history/read?${query.toString()}`, { credentials: 'same-origin' })
+  return (await unwrap(response)) as { file: string; text: string }
+}
+
+/**
+ * 恢复一个历史版本(守卫式写入:磁盘被外部改过就报 `FS_STALE_VERSION`,不覆盖)。
+ * @returns 恢复后的版本号 + **LF 形态**的正文(给编辑器直接 adopt,不经过保存)。
+ */
+export async function restoreHistory(
+  sessionId: string,
+  noteId: string,
+  file: string,
+): Promise<{ version: string; text: string; file: string; absolutePath: string }> {
+  return call('history/restore', { sessionId, noteId, file })
+}
+
+/**
+ * 「撤销最近一次外部改动」:回到当前磁盘内容**之前**那一次观察到的状态。
+ *
+ * 语义在 Host 侧(按 entry 的 `version` 找,不是"倒数第二条")—— agent 写前钩子记的
+ * 那条带的正是**写之前的版本**,所以命中的就是"这次 agent 修改之前"。
+ */
+export async function undoExternalChange(
+  sessionId: string,
+  noteId: string,
+): Promise<{ version: string; text: string; file: string; absolutePath: string }> {
+  return call('history/undo-external', { sessionId, noteId })
+}
+
 /** 守卫式保存:版本不符时抛 `RouteError('FS_STALE_VERSION')`,带上磁盘版本与内容。 */
 export async function saveNote(
   sessionId: string,

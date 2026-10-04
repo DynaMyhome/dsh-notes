@@ -19,6 +19,7 @@ import {
   setActiveWorkspace,
   setNotesRoot,
   setScanRoots,
+  statNotes,
   type WorkspaceInfo,
   fetchTrash,
   fetchTree,
@@ -73,6 +74,14 @@ const TREE_MIN = 160
 const TREE_MAX = 420
 /** 默认宽度(px):够看清层级,又不挤压编辑区。 */
 const TREE_DEFAULT = 220
+/**
+ * 外部改动探针的间隔(毫秒)。
+ *
+ * 为什么是 1.5s(比树轮询的 4s 快):树轮询管的是"列表有没有变",这条管的是
+ * **打开着的正文**有没有变 —— agent 改完要让用户"立刻看到"(照 Typora 的手感)。
+ * 一次请求问完两栏所有打开标签,Host 侧只 `stat` 不读正文,所以这个频率是安全的。
+ */
+const EXTERNAL_POLL_MS = 1500
 
 /** 槽位 props(只声明本组件真正用到的字段)。 */
 export interface NotesPaneProps {
@@ -178,6 +187,20 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
   const [scale, setScale] = useState<number>(() => readScale())
   /** 让**已挂载**的编辑器重量一次尺寸的信号:切回可见、或改了字号时 +1。 */
   const [measureNonce, setMeasureNonce] = useState(0)
+  /**
+   * 各标签的磁盘版本号(键 = 笔记绝对路径)。
+   *
+   * 只有**变化时**才替换这个对象(`probeExternal` 里做了 shallow-compare),否则
+   * 1.5s 一次 setState 会让整个笔记区白重渲染一遍。
+   */
+  const [externalVersions, setExternalVersions] = useState<Record<string, string | null>>({})
+  /**
+   * 「打开历史面板」的信号(树右键 →「历史版本…」)。
+   *
+   * 历史面板住在**编辑器**里(恢复要直接落到编辑器内容上),所以这里只发意图:
+   * 先把笔记打开,再用 nonce 把信号传下去 —— 与 `jumpTo` / `outlineMove` 同一套路。
+   */
+  const [historyRequest, setHistoryRequest] = useState<{ noteId: string; nonce: number } | null>(null)
   const layoutKey = workspaceKey ?? 'session'
 
   /** 布局与聚焦栏的镜像(键盘手势在事件里读最新值,不进依赖)。
@@ -311,6 +334,15 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       })
     },
     [layoutKey, openNote, tree],
+  )
+
+  /** 树右键「历史版本…」:先打开这篇笔记,再让那一栏的编辑器把历史面板弹出来。 */
+  const openHistoryFor = useCallback(
+    (note: TreeNote) => {
+      openNote(note, 'reuse')
+      setHistoryRequest((current) => ({ noteId: note.id, nonce: (current?.nonce ?? 0) + 1 }))
+    },
+    [openNote],
   )
 
   /**
@@ -505,6 +537,48 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     refreshRef.current = refresh
   }, [refresh])
 
+  /**
+   * 探一次"打开着的笔记,磁盘版本变了没有"。
+   *
+   * 只 stat(不读正文),一次请求问完**两栏所有打开标签**;结果只在真的变了时才
+   * setState(shallow-compare),否则 1.5s 一次会让整个笔记区白重渲染。
+   * 失败静默:外部改动同步是锦上添花,不为一次网络抖动弹错。
+   */
+  const probeExternal = useCallback((): void => {
+    if (document.visibilityState !== 'visible') return
+    if (!visibleRef.current) return
+    const paths = [
+      ...new Set(
+        layoutRef.current.panes
+          .flatMap((pane) => pane.tabs.map((tab) => tab.path))
+          .filter((path) => path !== undefined && path !== ''),
+      ),
+    ]
+    if (paths.length === 0) return
+    void statNotes(sessionId, paths)
+      .then((versions) => {
+        setExternalVersions((current) => {
+          const keys = Object.keys(versions)
+          if (keys.length === Object.keys(current).length && keys.every((key) => current[key] === versions[key])) {
+            return current
+          }
+          return versions
+        })
+      })
+      .catch(() => {
+        /* 静默:下一 tick 再试 */
+      })
+  }, [sessionId])
+
+  /**
+   * 探针的最新闭包(**不要**把它写进定时器 effect 的依赖里 —— 与 `refreshRef` 同一个坑:
+   * 宿主每次重渲染都会新建它,写进依赖就等于每次渲染重建定时器,永远等不到 tick)。
+   */
+  const probeRef = useRef(probeExternal)
+  useEffect(() => {
+    probeRef.current = probeExternal
+  }, [probeExternal])
+
   // 首次取树:等工作区解析完再拉(只做一次;见上面 `wsReady` 的注释)。
   // 依赖 `sessionId` 是为了换会话后重新取一次树 —— 那时 `wsReady` 会被上面的
   // loadWorkspaces effect 先置回 false,所以不会抢跑。
@@ -525,6 +599,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
     visibleRef.current = visible
     if (previous === visible || !visible) return
     void refreshRef.current()
+    // 隐藏期间探针也是停的 —— 切回来立刻补一次,别等下一个 1.5s
+    probeRef.current()
     setMeasureNonce((value) => value + 1)
   }, [visible])
 
@@ -536,7 +612,10 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
 
   // 回到这个窗口时对一次账(外部改名/删除不必等手动刷新)
   useEffect(() => {
-    const onFocus = (): void => void refreshRef.current()
+    const onFocus = (): void => {
+      void refreshRef.current()
+      probeRef.current()
+    }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [])
@@ -581,6 +660,14 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
       if (!visibleRef.current) return
       void refreshRef.current()
     }, 4000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  // 外部改动探针(1.5s):只问"打开着的正文,磁盘版本变了没有"。树轮询(4s)管的是列表,
+  // 正文变了它不会管;而 agent 改完要"立刻看到"。定时器同样**只挂一次**,门控在
+  // `probeExternal` 内部(页面可见 + 这个 tab 在显示 + 有打开的标签才发请求)。
+  useEffect(() => {
+    const timer = window.setInterval(() => probeRef.current(), EXTERNAL_POLL_MS)
     return () => window.clearInterval(timer)
   }, [])
 
@@ -1489,6 +1576,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
                     onOpenCandidates={onOpenCandidates}
                     scanCounts={filesScan === null ? null : { candidates: filesScan.stats.candidates, ignored: filesScan.stats.ignored }}
                     onTrash={onTrash}
+                    onHistory={openHistoryFor}
                     onCopyPath={onCopyPath}
                     onReveal={onReveal}
                     onNewNote={(collectionId) => startCompose('note', collectionId)}
@@ -1583,6 +1671,8 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
             jumpTo={jump}
             outlineMove={outlineMove}
             measureNonce={measureNonce}
+            externalVersions={externalVersions}
+            historyRequest={historyRequest}
             onWikiLink={onWikiLink}
             getKnownTitles={knownTitles}
             activePane={activePane}

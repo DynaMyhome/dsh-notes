@@ -69,6 +69,8 @@ import { bandsFromRects, hitInLine, type VerticalBand } from './click-hit'
 import { moveSection as moveSectionText } from '../../../lib/section.js'
 import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
 import { decorateFromTree } from './decorate'
+import { renderCell } from './cell-render'
+import { parseInlineMarkdown } from './inline-parse'
 import { planBlockInsert } from './blocks'
 import { resolveImageUrl } from './media'
 import { tableBlocks, tableTab, type WidgetStrings } from './table'
@@ -270,7 +272,9 @@ class ImageWidget extends WidgetType {
     img.loading = 'lazy'
     const caption = document.createElement('span')
     caption.className = 'dsh-cm-image-caption'
-    caption.textContent = this.alt === '' ? '' : this.alt
+    // 与主装饰层(decorate.ts 的 ImageWidget)保持一致:图题里的行内 markdown
+    // (尤其 `$公式$`)要渲染,不能把 `$A$` 原样显示出来。
+    caption.append(renderCell(this.alt, parseInlineMarkdown))
     wrap.append(img, caption)
     return wrap
   }
@@ -994,7 +998,21 @@ const theme = EditorView.theme({
   //   ② 图片 `max-width:100% + height:auto`(只缩不放,且保持长宽比,不变形)。
   '.dsh-cm-image': { display: 'inline-flex', flexDirection: 'column', gap: '2px', verticalAlign: 'middle', maxWidth: '100%' },
   '.dsh-cm-image img': { maxWidth: '100%', height: 'auto', maxHeight: '320px', objectFit: 'contain', borderRadius: '6px', display: 'block' },
-  '.dsh-cm-image-caption': { fontSize: cssSize(11), color: 'var(--dsw-alias-label-secondary)' },
+  // 图题:alt 文本走行内 markdown 渲染(`$公式$` / 加粗 / 行内码),所以这里按
+  // **行内流**排版(基线对齐 + 允许换行),并让里面的公式跟着图题字号走
+  // (Temml 的 `math` 默认继承 font-size,但显式写死 1em 免得被正文的 1.02em 带偏)。
+  '.dsh-cm-image-caption': {
+    fontSize: cssSize(11),
+    color: 'var(--dsw-alias-label-secondary)',
+    display: 'inline-flex',
+    alignItems: 'baseline',
+    flexWrap: 'wrap',
+    gap: '0 3px',
+    justifyContent: 'center',
+    textAlign: 'center',
+    maxWidth: '100%',
+  },
+  '.dsh-cm-image-caption math': { fontSize: '1em' },
 })
 
 /** 语法着色(代码块/行内 token)。 */

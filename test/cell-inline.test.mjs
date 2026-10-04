@@ -58,6 +58,19 @@ test('公式:整段换成 widget,teX 取到 `$` 之间的内容', () => {
   assert.equal(nodeText(nodes), '$kC_n \\approx C_{po}$ 一阶抵消寄生电流')
 })
 
+test('图题(图片 alt)里的公式要能渲染 —— 论文图注的典型写法', () => {
+  // 用户实测:`![图 4 纳米孔源 + 运放 $A$ + 单位增益 buffer $A_1$](…)` 的**图题**
+  // 以前是 `caption.textContent = alt`,于是 `$A$` / `$A_1$` 原样显示成源码。
+  // 现在图题与表格单元格走**同一套**决策层(renderCell),这条用例锁住那一半纯逻辑。
+  const caption = '图 4 纳米孔源 + 运放 $A$ + 单位增益 buffer $A_1$'
+  const nodes = nodesOf(caption)
+  const maths = nodes.filter((node) => node.kind === 'widget' && node.widget === 'math').map((node) => node.tex)
+  assert.deepEqual(maths, ['A', 'A_1'], '两个行内公式都要变成 math widget')
+  assert.equal(nodeText(nodes), caption, '除公式本身外,图题文字一个字都不能丢')
+  // 图题里写 `**图 4**` 很常见:加粗也必须认
+  assert.deepEqual(nodeClasses(nodesOf('**图 4** 示意')), ['dsh-cm-strong'])
+})
+
 test('双链:按标题表上色,`[[` `]]` 消失', () => {
   const known = nodesOf('见 [[TC 机制]]', new Set(['TC 机制']))
   assert.equal(nodeText(known), '见 TC 机制')

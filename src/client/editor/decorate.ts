@@ -16,6 +16,8 @@ import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, typ
 import { HIDE, LINE, MARK, WIDGET, decideDecorations } from '../../../lib/markdown-render.js'
 import temml from 'temml'
 
+import { renderCell } from './cell-render'
+import { parseInlineMarkdown } from './inline-parse'
 import { isSourceMode } from './mode'
 import { resolveImageUrl } from './media'
 
@@ -130,11 +132,19 @@ class ImageWidget extends WidgetType {
     wrap.title = this.expandTitle
     const img = document.createElement('img')
     img.src = this.url
+    // `img.alt` 保留**原文**(无障碍/纯文本场景要的是原始说明,不是渲染结果)
     img.alt = this.alt
     img.loading = 'lazy'
     const caption = document.createElement('span')
     caption.className = 'dsh-cm-image-caption'
-    caption.textContent = this.alt
+    // 图题(alt 文本)里常有公式 —— 论文图注的典型写法就是
+    // `![图 4 纳米孔源 + 运放 $A$ + 单位增益 buffer $A_1$](…)`。以前这里是
+    // `caption.textContent = alt`,于是 `$A$` 永远显示成原文(用户实测)。
+    // 现在走与表格单元格**同一套**决策层 + 渲染器(公式走 Temml)。
+    //
+    // 双链按"不存在"处理(空 knownTitles):图题里出现 `[[…]]` 没有实际意义,
+    // 而把标题集塞进 widget 会迫使 `eq()` 也比较它 —— 不值当。
+    caption.append(renderCell(this.alt, parseInlineMarkdown))
     wrap.append(img, caption)
     clickToReveal(wrap, view, this.from)
     return wrap

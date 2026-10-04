@@ -64,6 +64,13 @@ export interface TreePaneProps {
   onDismissError: () => void
   /** 删除笔记 = 移入回收站(文件可恢复)。 */
   onTrash?: (note: TreeNote) => void
+  /**
+   * 看这篇笔记的历史版本(agent 改坏了可以回到改之前)。
+   *
+   * 外壳会先把这篇笔记打开,再把"打开历史面板"的信号发给那一栏的编辑器 ——
+   * 历史面板属于编辑器(恢复要直接落到编辑器里),所以这里只发意图。
+   */
+  onHistory?: (note: TreeNote) => void
   /** 正在行内改名的行 key(`n:<id>` / `c:<id>`)。 */
   renamingKey?: string | null
   /** 提交笔记改名(行内输入回车/失焦)。 */
@@ -690,6 +697,7 @@ export function TreePane(props: TreePaneProps): React.ReactElement {
               return [
                 item('pin', note.pinned ? t('menu.unpin') : t('menu.pin'), () => props.onPin(note, !note.pinned)),
                 item('rename', t('menu.rename'), () => props.onStartRename?.(menu.row.key)),
+                item('history', t('history.open'), () => props.onHistory?.(note)),
                 item('path', t('menu.copyPath'), () => props.onCopyPath(note.path, note.relPath)),
                 item('reveal', t('menu.reveal'), () => props.onReveal(note.relPath)),
                 item('newHere', t('menu.newNoteHere'), () => props.onNewNote(menu.row.parentId ?? null)),

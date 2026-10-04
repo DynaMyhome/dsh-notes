@@ -13,7 +13,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { parseOutline } from '../../lib/outline.js'
-import { RouteError, readNote, saveNote, saveNoteBeacon, uploadAsset, type TreeNote } from './api'
+import {
+  RouteError,
+  fetchHistory,
+  readNote,
+  saveNote,
+  saveNoteBeacon,
+  undoExternalChange,
+  uploadAsset,
+  type TreeNote,
+} from './api'
 import {
   createEditor,
   historyRedo,
@@ -36,6 +45,7 @@ import { applyTableAction, type TableActionKind } from './editor/table-model'
 import type { WidgetStrings } from './editor/table'
 import type { OutlineItem } from './OutlinePane'
 import { ContextMenu, type MenuEntry } from './ContextMenu'
+import { HistoryPanel } from './HistoryPanel'
 import { setSourceMode as applySourceMode } from './editor/mode'
 import { buildNoteReference, headingBreadcrumb } from './editor/reference'
 import {
@@ -43,6 +53,7 @@ import {
   IconCheck,
   IconCode,
   IconCodeBlock,
+  IconHistory,
   IconHr,
   IconHighlight,
   IconImage,
@@ -108,6 +119,20 @@ export interface EditorPaneProps {
    * 条本身在两边都保留(等高),所以切换聚焦时高度不会跳。
    */
   showToolbar?: boolean
+  /**
+   * 磁盘上这篇笔记的版本号(外壳每 1.5s 探一次;见 `NotesPane` 的 `probeExternal`)。
+   *
+   * 三种取值:`undefined` = 还没探到(不动);`string` = 磁盘当前版本;`null` = 文件
+   * 不在了(被移走/删掉)。版本与手里的一致就什么都不做。
+   */
+  externalVersion?: string | null
+  /** 这个标签是不是**它所在栏**的活动标签(隐藏标签不处理外部改动)。 */
+  active?: boolean
+  /**
+   * 「打开历史面板」的信号(树右键 →「历史版本…」;`nonce` 变了就弹一次)。
+   * 面板本体在编辑器里,所以外壳只发意图、由这里弹。
+   */
+  historyRequest?: { nonce: number } | null
 }
 
 /** 保存状态。 */
@@ -128,10 +153,30 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   const versionRef = useRef<string>('')
   const timerRef = useRef<number | null>(null)
   const dirtyRef = useRef(false)
+  /**
+   * 正在保存(守卫式 save 在飞行中)。
+   *
+   * 外部改动探针要靠它:保存请求发出去、响应还没回来的那一小段时间里,磁盘版本已经变了
+   * 但 `versionRef` 还是旧值 —— 不跳过就会把自己刚写的内容当成"外部改动",误报冲突。
+   */
+  const savingRef = useRef(false)
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const [conflict, setConflict] = useState<{ version: string; text: string | null } | null>(null)
+  /** 磁盘上的文件不见了(被移走/删掉):常驻一条提示,回来了自动消失。 */
+  const [gone, setGone] = useState(false)
+  /** 历史版本面板开着没有。 */
+  const [historyOpen, setHistoryOpen] = useState(false)
+  /**
+   * 冲突横幅里「撤销这次外部改动」能不能点。
+   *
+   * 进冲突态时查一次历史(便宜的一次 GET):**没有更早的状态就不显示这个按钮** ——
+   * 宁可少一个按钮,也不要给一个点了必然报错的入口。
+   */
+  const [canUndoExternal, setCanUndoExternal] = useState(false)
+  /** 「撤销这次外部改动」的二次确认(它会覆盖编辑器内容,包括没保存的编辑)。 */
+  const [undoConfirm, setUndoConfirm] = useState(false)
   /** 一次性提示(如「已恢复 dsh-note-id」),3 秒后自动消失。 */
   const [notice, setNotice] = useState<string | null>(null)
   /** 右键菜单(位置 + 打开时的选区快照)。 */
@@ -194,6 +239,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     const payload = text ?? editor?.getDoc()
     if (payload === undefined) return
     setSaveState('saving')
+    savingRef.current = true
     try {
       const result = await saveNote(sessionId, note.path, payload, versionRef.current)
       versionRef.current = String(result.version)
@@ -226,6 +272,9 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       }
       setError(caught instanceof Error ? caught.message : String(caught))
       setSaveState('error')
+    } finally {
+      // 无论成功/冲突/失败都要落回 false:探针靠它区分"自己写的"与"外部改的"。
+      savingRef.current = false
     }
   }, [note.path, sessionId, t])
 
@@ -445,6 +494,12 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     editorRef.current?.scrollToLine(target.line)
   }, [props.jumpTo])
 
+  /** 树右键「历史版本…」→ 弹出历史面板(信号按 nonce 触发一次)。 */
+  useEffect(() => {
+    if (props.historyRequest === null || props.historyRequest === undefined) return
+    setHistoryOpen(true)
+  }, [props.historyRequest])
+
   /** 大纲拖拽 → 在正文里搬移整个章节(纯文本搬移,见 lib/section.js,有单测)。 */
   useEffect(() => {
     const request = props.outlineMove
@@ -472,6 +527,133 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     setConflict(null)
     await save()
   }, [conflict, save])
+
+  /**
+   * 把磁盘上的新内容装进编辑器(**外部改动自动同步**),光标与滚动位置保留。
+   *
+   * `setDoc` 会触发 `onChange`(把 dirty 置 true、排一次 800ms 自动保存)—— 与既有
+   * `reload()` 同一套路:紧接着把状态改回"干净、已同步",那次定时器到点会因为
+   * `dirty === false` 直接返回,不会把刚读进来的内容又写回去。
+   * @param text - 磁盘内容(LF 形态)。
+   * @param version - 该内容的版本号。
+   */
+  const applyExternalText = useCallback(
+    (text: string, version: string): void => {
+      const editor = editorRef.current
+      if (editor === null) return
+      const head = editor.view.state.selection.main.head
+      const scrollTop = editor.view.scrollDOM.scrollTop
+      editor.setDoc(text)
+      // 夹取再 dispatch:CM6 的 `Selection points outside of document` 是**硬抛错**
+      // (项目里每一处 dispatch 都这么夹一次,别再漏)。
+      const length = editor.view.state.doc.length
+      editor.view.dispatch({ selection: { anchor: Math.max(0, Math.min(head, length)) } })
+      if (scrollTop > 0) editor.view.scrollDOM.scrollTop = scrollTop
+      versionRef.current = version
+      dirtyRef.current = false
+      setSaveState('saved')
+      setConflict(null)
+      setLength(normalizedLength(text))
+      outlineRef.current?.(parseOutline(text))
+      setNotice(t('editor.synced'))
+    },
+    [t],
+  )
+
+  /**
+   * 外部改动(agent / Obsidian / 另一个窗口 / bash)自动同步。
+   *
+   * 判据是**磁盘版本号**(外壳每 1.5s 探一次,见 `NotesPane.probeExternal`),不是猜:
+   * 与手里的一致就什么都不做。三种处理:
+   *   - 编辑器**干净** → 静默重载(保留光标与滚动)—— 这就是"Typora 式"的立刻可见;
+   *   - 有**未保存的编辑** → 只弹既有冲突横幅(重新载入 / 用我的覆盖),绝不静默覆盖输入;
+   *   - 文件**不在了** → 常驻一条提示,不销毁编辑器。
+   *
+   * 两个"不要误报"的护栏(都是实测会踩的):
+   *   1. 保存飞行中(`savingRef`)跳过 —— 那时磁盘版本已经变了、`versionRef` 还没跟上;
+   *   2. 还有一次 beacon 写入没被认领(`beaconTextRef`)时跳过 —— 回到前台时那条
+   *      hidden→visible 的静默对账会先把它 adopt 掉,不跳的话会把自己写的内容当外部改动。
+   */
+  useEffect(() => {
+    if (props.active === false) return
+    if (props.externalVersion === undefined) return
+    if (status !== 'ready' || savingRef.current || beaconTextRef.current !== null) return
+    if (props.externalVersion !== null && props.externalVersion === versionRef.current) {
+      setGone(false)
+      return
+    }
+    if (props.externalVersion === null) {
+      setGone(true)
+      return
+    }
+    const version = props.externalVersion
+    setGone(false)
+    if (dirtyRef.current || conflict !== null) {
+      // 已经在为这个版本弹横幅了就别重复读盘
+      if (conflict !== null && conflict.version === version) return
+      void readNote(sessionId, note.path)
+        .then((loaded) => setConflict({ version: String(loaded.version), text: loaded.text }))
+        .catch(() => setConflict({ version, text: null }))
+      return
+    }
+    void readNote(sessionId, note.path)
+      .then((loaded) => {
+        const loadedVersion = String(loaded.version)
+        if (loadedVersion === versionRef.current) return
+        // 读盘这段时间里用户可能已经开始打字/保存 → 转横幅,绝不覆盖
+        if (dirtyRef.current || savingRef.current) {
+          setConflict({ version: loadedVersion, text: loaded.text })
+          return
+        }
+        applyExternalText(loaded.text, loadedVersion)
+      })
+      .catch(() => {
+        /* 读不到就算了:下一 tick 会再试,不为一次抖动打扰用户 */
+      })
+  }, [applyExternalText, conflict, note.path, props.active, props.externalVersion, sessionId, status])
+
+  /**
+   * 冲突横幅里的「撤销这次外部改动」有没有可回退的历史?
+   *
+   * 进冲突态时查一次(便宜的一次 GET),**没有更早的状态就不显示这个按钮** ——
+   * 宁可少一个按钮,也不要给一个点了必然报错的入口。
+   */
+  useEffect(() => {
+    if (conflict === null) {
+      setCanUndoExternal(false)
+      setUndoConfirm(false)
+      return undefined
+    }
+    let cancelled = false
+    void fetchHistory(sessionId, note.id)
+      .then((result) => {
+        if (!cancelled) setCanUndoExternal(result.entries.length > 0)
+      })
+      .catch(() => {
+        if (!cancelled) setCanUndoExternal(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [conflict, note.id, sessionId])
+
+  /**
+   * 撤销这次外部改动:回到当前磁盘内容**之前**那一次观察到的状态。
+   *
+   * 语义在 Host 侧(`predecessorOf`:按 entry 的 `version` 找,不是"倒数第二条")——
+   * agent 写前钩子记的那条带的正是**写之前的版本**,所以命中的就是"这次 agent 修改之前"。
+   */
+  const undoExternal = useCallback(async (): Promise<void> => {
+    try {
+      const result = await undoExternalChange(sessionId, note.id)
+      applyExternalText(result.text, String(result.version))
+      setUndoConfirm(false)
+      setNotice(t('editor.undoExternalDone'))
+    } catch (caught) {
+      setUndoConfirm(false)
+      setNotice(caught instanceof Error ? caught.message : String(caught))
+    }
+  }, [applyExternalText, note.id, sessionId, t])
 
   useEffect(() => {
     if (notice === null) return undefined
@@ -858,6 +1040,16 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
             <button
               type="button"
               className="dsh-notes-btn"
+              title={t('history.open')}
+              aria-label={t('history.open')}
+              disabled={status !== 'ready'}
+              onClick={() => setHistoryOpen(true)}
+            >
+              <IconHistory />
+            </button>
+            <button
+              type="button"
+              className="dsh-notes-btn"
               title={sourceMode ? t('editor.previewMode') : t('editor.sourceMode')}
               aria-label={sourceMode ? t('editor.previewMode') : t('editor.sourceMode')}
               aria-pressed={sourceMode}
@@ -992,6 +1184,29 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       {menu === null ? null : (
         <ContextMenu x={menu.x} y={menu.y} entries={menuEntries(menu)} onClose={() => setMenu(null)} />
       )}
+      {historyOpen ? (
+        <HistoryPanel
+          t={t}
+          sessionId={sessionId}
+          noteId={note.id}
+          title={note.title}
+          onClose={() => setHistoryOpen(false)}
+          onRestored={(result) => {
+            // 恢复本身就是一次写盘:把结果**直接装进编辑器**(不经过保存),
+            // 否则 800ms 后自动保存又会把当前内容写回去。
+            applyExternalText(result.text, result.version)
+            setNotice(t('history.restored'))
+          }}
+        />
+      ) : null}
+      {gone ? (
+        // 文件被移走/删掉:常驻一条提示(复用冲突条的样式,不新造一套视觉)。
+        // 不销毁编辑器 —— 用户可能只是把它挪了个位置,回来了这条自动消失。
+        <div className="dsh-notes-conflict">
+          <IconWarn size={14} />
+          <span className="dsh-notes-conflict-text">{t('editor.externalGone')}</span>
+        </div>
+      ) : null}
       {conflict !== null ? (
         <div className="dsh-notes-conflict">
           <IconWarn size={14} />
@@ -1002,6 +1217,23 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
           <button type="button" className="dsh-notes-btn" onClick={() => void overwrite()}>
             {t('editor.overwrite')}
           </button>
+          {canUndoExternal ? (
+            <button
+              type="button"
+              className={`dsh-notes-btn${undoConfirm ? ' dsh-notes-trash-danger' : ''}`}
+              onClick={() => {
+                // 二次确认:这一步会把编辑器内容换成"改动之前"的那一份,
+                // 包括还没保存的编辑 —— 值得多点一下。
+                if (!undoConfirm) {
+                  setUndoConfirm(true)
+                  return
+                }
+                void undoExternal()
+              }}
+            >
+              {undoConfirm ? t('editor.undoExternalConfirm') : t('editor.undoExternal')}
+            </button>
+          ) : null}
         </div>
       ) : null}
 

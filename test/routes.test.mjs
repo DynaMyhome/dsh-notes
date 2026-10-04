@@ -133,6 +133,32 @@ test('GET 路由:sessionId 从查询串取,不读 body', async () => {
   assert.equal(seen[0].force, true)
 })
 
+test('POST 路由:/stat 把路径列表交给 service,并原样回版本映射(含 null)', async () => {
+  const seen = []
+  const { ctx, routes } = fakeCtx()
+  installRoutes(ctx, {
+    statNotes: async (payload) => {
+      seen.push(payload)
+      return { versions: { '/ws/notes/a.md': 'v2', '/ws/notes/b.md': null } }
+    },
+    tree: async () => ({}),
+  })
+  const res = fakeRes()
+  await routes.get(`${ROUTE_PREFIX}/stat`)(
+    fakeReq(
+      'POST',
+      `${ROUTE_PREFIX}/stat`,
+      JSON.stringify({ sessionId: 's-1', paths: ['/ws/notes/a.md', '/ws/notes/b.md'] }),
+    ),
+    res,
+  )
+  assert.equal(res.status, 200)
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].sessionId, 's-1')
+  assert.deepEqual(seen[0].paths, ['/ws/notes/a.md', '/ws/notes/b.md'])
+  assert.deepEqual(JSON.parse(res.body).value.versions, { '/ws/notes/a.md': 'v2', '/ws/notes/b.md': null })
+})
+
 test('错误映射:NotesError.code → HTTP 状态 + 冲突字段', async () => {
   const { NotesError } = await import('../lib/service.js')
   const { ctx, routes } = fakeCtx()

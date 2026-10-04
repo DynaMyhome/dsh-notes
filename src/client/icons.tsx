@@ -283,6 +283,17 @@ export function IconWarn(props: IconProps): React.ReactElement {
   )
 }
 
+/** 历史版本(表盘 + 回转指针,一眼区别于「撤销」)。 */
+export function IconHistory(props: IconProps): React.ReactElement {
+  return (
+    <Svg {...props}>
+      <path d="M2.4 8a5.6 5.6 0 1 0 1.9-4.2" />
+      <path d="M2.2 2.4v3.2h3.2" />
+      <path d="M8 5.2V8l2.1 1.4" />
+    </Svg>
+  )
+}
+
 /* ------------------------------------------------------------------ *
  * P5 工具栏扩充:撤销/重做、删除线、有序列表、任务列表、缩进、代码块、
  * 链接、表格、公式、双链。
