@@ -466,8 +466,9 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | 事实 | 值 |
 | --- | --- |
 | 仓库 | `DynaMyhome/dsh-notes` —— **2026-10-02 起 public**,已加 `dsh-plugin` topic |
-| 版本线 | v0.5.0(2026-10-01 规范化)→ **v0.5.1**(README 图文版 + 截图声明)→ **v0.5.2**(平台兼容) |
-| tag / Release | 一版一个 annotated tag + GitHub Release,body 取 CHANGELOG 对应段;v0.5.1 / v0.5.2 已于 2026-10-02 补齐 |
+| 版本线 | v0.5.0(2026-10-01 规范化)→ v0.5.1(README 图文版 + 截图声明)→ v0.5.2(平台兼容)→ v0.6.0(漏声明的 peer)→ **v0.7.0**(历史回退 + 外部改动实时同步 + 图题公式,2026-10-04) |
+| tag / Release | 一版一个 annotated tag + GitHub Release,body 取 CHANGELOG 对应段;**v0.7.0 已于 2026-10-04 推送**(tag `v0.7.0` → commit `c273cd1`,Release [v0.7.0](https://github.com/DynaMyhome/dsh-notes/releases/tag/v0.7.0));v0.5.1 / v0.5.2 已于 2026-10-02 补齐 |
+| 推送凭据 | 本机 `origin` 是 **SSH**(`git@github.com:…`),但 Windows 侧**没有可用的 ssh-agent/key**(`Permission denied (publickey)`);`gh` 已以 `Phy-D` 登录(HTTPS 协议),所以推送走 `git -c credential.helper='!gh auth git-credential' push https://github.com/DynaMyhome/dsh-notes.git master`(WSL 侧仍可用 SSH) |
 | 对外的发布面 | 不是 npm(`private: true`,从不发布)——**git 仓库本身就是发布面**:README、`docs/images/`、`screenshots.json` |
 | 市场投稿 | [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 的收录材料(条目 YAML + 逐条依据 + 分类依据 + 重拍配方)在工作区 `docs/dsh-notes-市场收录材料.md`(**仓库外**);**已于 2026-10-02 提 PR:awesome-dsh-plugin#6389**(fork `Phy-D/awesome-dsh-plugin` 分支 `add-dsh-notes`,只加 `data/plugins/DynaMyhome__dsh-notes.yml`;被打回就推同一分支) |
 
