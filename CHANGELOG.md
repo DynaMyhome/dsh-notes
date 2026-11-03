@@ -45,7 +45,7 @@
   不比"算出来的初始高度"(拖拽只改 localStorage),位置用 `view.posAtDOM(root, 0)` 现取。
 - 纯逻辑独立成 `embed-model.ts`(解析/路径/URL/高度夹取)与 `embed-size.ts`(高度记忆),
   在 Node 里可测;Host 侧 `service.readEmbed`(只读,`readBytes` 缺失时退化 `readText`)。
-- 新增单测:**316 条全绿**(新增 `embed-model` / `embed-size` / `service-embed`,并扩了 `routes`
+- 新增单测:**317 条全绿**(新增 `embed-model` / `embed-size` / `service-embed`,并扩了 `routes`
   与 `locale-guard`)。
 
 ### 已知边界(不是 bug)
