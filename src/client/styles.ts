@@ -30,6 +30,17 @@ import { cssSize as sc } from './scale'
 export const CSS = [
   /* 外壳 */
   `.dsh-notes-root{--dsh-notes-scale:1;position:relative;display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:${sc(13)}}`,
+  // 公式(`math` 元素)**必须显式指定数学字体** —— Temml 只输出 MathML,而可拉伸定界符
+  // (`\left\{` / `\begin{cases}` 的大括号、`\left(` 等)靠字体里的 MATH 表做「组装」。
+  // 一旦 `math` 的有效字体落到普通字体(宿主/Electron 的字体偏好,或任何覆盖 `math` 的规则),
+  // 大括号会缩成基号大小并垂直居中,只对齐某一行(2026-10-05 用户实测)。
+  // 实测数字(Edge 153 headless,同一段 MathML):`math` 默认字体 mo=147.0 / table=142.8(拉伸);
+  // 显式换成 `monospace` / `inherit` 后 mo=35.0 / table=133.8(**不拉伸**)。
+  // 字体栈 = Temml 自带 `Temml-Local.css` 的官方建议(Windows 上 Cambria Math 必有),
+  // 再补 macOS / Linux 常见数学字体;`math` 泛型与 `serif` 只作最后兜底。
+  // 只写 font-family:不搬 Temml 的 line-height/font-style 归一化 —— 那些会动行内公式的
+  // 行盒高度,而本插件的行高测量与点击落点耦合(见 AGENTS「点击落点」)。
+  '.dsh-notes-root math{font-family:"Cambria Math","STIX Two Math","STIXTwoMath-Regular","Latin Modern Math","Noto Sans Math","DejaVu Math TeX Gyre",math,serif}',
   `.dsh-notes-header{display:flex;align-items:center;gap:4px;flex:0 0 auto;height:${sc(30)};padding:0 8px;border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-sidebar-fill)}`,
   `.dsh-notes-title{font-size:${sc(12)};font-weight:600;white-space:nowrap}`,
   `.dsh-notes-sub{font-size:${sc(11)};color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}`,

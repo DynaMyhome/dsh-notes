@@ -3,6 +3,191 @@
 本插件按 [语义化版本](https://semver.org/lang/zh-CN/) 打 tag;`v0.2.0` 是**首个带 tag 的发布**
 (0.1.0 是开发期的初始版本,当时没有打 tag,仓库里也没有 release)。
 
+## v0.8.0 — 网页演示:笔记里就地跑可交互 HTML(2026-11-03)
+
+### 动机
+
+笔记里一直只能**指向**一个 HTML 演示(写个链接,点开去浏览器看),而这类东西的意义就在
+"拖一下、看它变" —— 离开笔记、切窗口、再切回来,理解成本全在切换上。用户原话:
+「就是插入 html 的网页演示……让网页能够在笔记里面直接显示,而不仅仅是插入路径」。
+
+### 新功能
+
+- ```` ```embed <路径> ```` 围栏 → 就地**沙箱 iframe**:脚本真的执行(用户在 Analog IC 的
+  三电平 SAR 演示上验收:拖 ΔV 滑块,图跟着变)。路径相对笔记目录解析;也可写
+  `title:` / `height:` 两行配置(`path:` / `src:` 同义),高度 160–2400、默认 560。
+- **底边拖拽调高度**,按文件记在 `localStorage['dsh-notes:embed-size']`(最近 200 条),
+  重开笔记仍是上次的高度;拖完不会因为"点了下别处"就把 iframe 重载。
+- 条上三枚按钮:「源码」(光标回到围栏)、「刷新」(带 nonce 重载)、「在新标签打开」
+  (仅 http(s) 载体;桌面壳的自定义 scheme 下不显示)。
+- 工具栏 21 → 22 键:插入组新增「插入网页演示」;右键「插入」子菜单同步加一条。
+- 光标进入围栏 → 显示原始 markdown(与代码卡一致);移开 → 恢复 iframe。
+
+### 安全模型(这是本版最需要知道的)
+
+- 服务端是**插件自己的** `GET /dsh-notes/embed`,不是官方 `/api/file`:后者响应头是
+  `Content-Security-Policy: sandbox; default-src 'none'`,HTML 进 iframe 后脚本/样式全被禁,
+  做不出交互。
+- 响应头 `EMBED_CSP`:`sandbox`(**不带 `allow-same-origin`**)+ 放行内联脚本/样式 + **断网**
+  (`default-src 'none'` / `connect-src 'none'`)+ `nosniff` / `no-referrer` / `no-store`。
+  于是演示页拿不到 `parent.document`、`document.cookie`、`localStorage`,也发不出网络请求 ——
+  **演示页必须自包含**(内联 CSS/JS、`data:` 图片;CDN 与相对资源都不行)。
+- 读取边界 = **当前工作区**(笔记面板可切到别的已登记工作区,所以 `workspaceKey` 一路从面板传到
+  路由);两边都用 `fs.processPath` 的 realpath 派生路径比对,挡 `..` 与符号链接逃逸;
+  只认 `.html/.htm`,单文件上限 8MB。越界/非 HTML/缺失/超限在 iframe 里显示可读的错误页,
+  而不是一坨 JSON。
+- 配置 `htmlEmbed`(默认 `true`):关掉 = 该路由一律 403 错误页,其他功能不变。
+
+### 实现要点(给后来改这块的人)
+
+- 块级替换只能在 `table.ts` 的 StateField 里做,且围栏要**独占整行**(被 `>` 引用/列表包住的
+  退回代码卡)。`EmbedWidget.eq()` **刻意不比 `from`**(否则在块上方打字就重载 iframe)、也
+  不比"算出来的初始高度"(拖拽只改 localStorage),位置用 `view.posAtDOM(root, 0)` 现取。
+- 纯逻辑独立成 `embed-model.ts`(解析/路径/URL/高度夹取)与 `embed-size.ts`(高度记忆),
+  在 Node 里可测;Host 侧 `service.readEmbed`(只读,`readBytes` 缺失时退化 `readText`)。
+- 新增单测:**316 条全绿**(新增 `embed-model` / `embed-size` / `service-embed`,并扩了 `routes`
+  与 `locale-guard`)。
+
+### 已知边界(不是 bug)
+
+- 演示页滚出视口再滚回来,iframe 会被 CM6 重建、**演示状态重置**(没有做 keep-alive);
+- iframe 获得焦点时编辑器快捷键不生效(点回正文即恢复);滚轮在 iframe 上滚的是演示页;
+- 只支持自包含页面;需要 CDN / 相对资源 / 联网的演示,请用「在新标签打开」或直接在浏览器里看。
+
+## v0.7.3 — 历史快照补上「`notes/` 之外的已登记笔记」(2026-10-24)
+
+### 现象
+
+一篇登记在 `research/…`(不在 `notes/` 下)的笔记,「历史版本」里的快照停在某一次之后
+**再也不增长** —— 用户原话「最近很长时间都没有快照了」;同一工作区里 6 篇笔记有 5 篇
+(都在 `notes/` 之外)在 `history.json` 里连基线都没有。
+
+### 根因
+
+历史只有两个捕获点,而这两个点**恰好都覆盖不到"住在 `notes/` 之外的笔记"**:
+
+1. **写前钩子**(`tools/execute` → `captureBeforeToolWrite`)只认工具名 `write`/`edit`。
+   agent 一旦改用 `pwsh` 里跑 Python `p.write_text()` 改文件,钩子根本不会被触发;
+   笔记面板自己的保存(`save()`)也不写历史(800ms 自动保存下每存一次记一条会把上限吃光)。
+2. **扫描兜底**(`runScan` 末尾的 `captureScannedNotes`)本该兜住这些写入者,但它只吃
+   `scanNotesRoot(workspace.notesRoot)` 的结果 —— 也就是**只覆盖 `notes/` 目录**。
+   `notes/` 之外的已登记笔记只被 `verifyOutside` stat 一下确认"没被删",**从不进历史**。
+
+实测取证(Analog IC 工作区,`n_de19d7c0a8f642899238`):
+
+| 时间 | 发生了什么 | 快照 |
+| --- | --- | --- |
+| 10-24 00:06 – 01:44 | agent 一直用 `edit` 改这篇笔记 | 19 条(1 baseline + 18 agent 写前),看起来正常 |
+| 10-24 02:23 / 02:24 | agent 改成 `pwsh` + Python `p.write_text()` | **0 条** |
+| 10-24 02:30 | 面板/外部保存 | **0 条**,`history.json` 停在 01:44 |
+
+### 修法
+
+- `verifyOutside` 现在顺带产出 `{ path, version, size }` 清单(这一趟 stat 本来就要做),
+  `runScan` 把它和 `scanNotesRoot` 的结果合并后一起喂给 `captureScannedNotes`
+  (`outside.files` 排前面,50 条/次的预算优先给长期没被覆盖的那批)。
+- 扫描**不完整**时(典型:工作区还没有 `notes/` 目录)也照样捕获:这一路只 stat、
+  **不删条目**(「列不出目录」不等于「文件没了」),把该工作区全部已登记笔记当候选。
+- 扫描完整时维持原有语义:核实确实不存在才删条目。
+
+### 效果(修复后同一台机器实测)
+
+- 那篇笔记在修复生效后的第一轮扫描(02:51:41)就补出一条 `external` 快照(当前内容,29888 B);
+  之后 `pwsh`/Python 的改动会在一个扫描周期内各补一条。
+- 同工作区另外 4 篇 `notes/` 之外的笔记同轮各补一条 `baseline`。
+
+### 仍然存在的边界(刻意不修)
+
+- `pwsh`/Python 这类写入按**扫描节奏**收口 —— 一个扫描间隔内的多次中间状态会合成一条
+  (中间态只有 `write`/`edit` 的写前钩子才有)。不为此加"工具后全量 stat"或定时巡检。
+- 面板内的编辑看到的是"改动后"的版本(没有保存前快照),撤销本次编辑请用编辑器自己的 Ctrl+Z。
+
+单测:`test/service-history.test.mjs` 新增两条(notes/ 之外被捕获 + 没有 `notes/` 时不误删),
+共 **290 条**全绿。
+
+## v0.7.2 — 外部改动不再"被置顶" + 滚动不再被图片顶跳(2026-10-09)
+
+两个都出在**同一个根**上:**行高/位置不能靠"页面像素"表达,要靠文档位置。**
+
+### 1. agent 改完笔记,视口被置顶
+
+**现象**:agent(或 Obsidian/vim)改完文件,客户端 1.5s 探针发现版本变了、静默重载 ——
+重载后视口跑到别处(用户描述"被置顶"),而不是停在原来看的那一段。
+
+**根因**:外部改动走的是 `setDoc`,即**整篇替换**(`dispatch({from:0,to:len,insert})`):
+- CM6 的 `HeightMap` 对"被改动的行"会丢掉已测高度、退回 `lineHeight` 估算 —— 整篇替换
+  = **全篇都变成估算**(带图的行实测 320px,估算只有 ~20px),文档总高瞬间缩水;
+- `ChangeDesc.mapPos` 对整篇替换把所有位置映射到插入段末尾,最后只能把**原始 scrollTop**
+  写回去,落点自然不准。
+
+**修法**:`EditorHandle.setDoc` → `replaceFromDisk`(替换掉三个调用点,不留死代码):
+`editor/diff.ts` 先夹出**最小改动**(公共前缀/后缀;顺带把 CRLF 归一成 LF,因为
+`readNote` 给的是磁盘原文),再用 CM6 官方的 `scrollSnapshot()` + `effect.map(changes)`
+按**文档位置 + 行内像素偏移**把视口放回同一段内容。整篇重写(原样保留不足 10%)时位置映射
+没有意义,退化成"同一行号 + 同一像素偏移"。
+
+**实测**(工装用插件真实的 `createEditor`/`replaceFromDisk`,400 行 + 27 张 320px 图片行,
+光标滚到第 220 行,然后在**文档最上面**插一行):
+
+| 走哪条路 | 重载后视口顶部 | 内容总高 |
+| --- | --- | --- |
+| 旧:整篇 `setDoc` + 写回 scrollTop | 第 **392** 行(`img-390.png`)——位置丢了 | 16276 → **9658**(高度图塌了) |
+| 新:`replaceFromDisk` | 第 **222** 行,文本仍是 `line-0220 普通正文`(上面插了一行,所以 +1) | 16276 → 16296 |
+
+### 2. 向上滚动时"内容突然往下挪一截"
+
+**现象**:在带图的长笔记里上下滚动,内容会一跳一跳地往下挪,像丢了页码。
+
+**根因**:图片行内 widget 的 `<img>`**只有在位图到位后才有高度**,而图片行可以高到
+`max-height:320px`。向上滚动 → 视口上方的 widget 被重建(`h=0`)→ CM6 把那行量成 ~20px
+(高度图缩水,内容跳一下)→ 位图到位涨到 ≤320px(**再往下跳一截**)。
+
+**实测**(插件同一套 CSS,src 指向永不返回的地址 = 位图未到):
+
+| 图片写法 | 该行高度 |
+| --- | --- |
+| 不写字面尺寸(= 改前) | **20** |
+| 写 `width=800 height=1600`(CSS 的 `max-width:100%` / `max-height:320px` 照常夹取) | **322** |
+
+**修法**:新增 `image-size.ts`(纯模型 + 可注入 storage):记住每张图**曾经量到的固有尺寸**
+(会话内内存 + `localStorage['dsh-notes:img-size']`,最近 400 条),下次创建 widget 时
+直接把 `width`/`height` 写到 `<img>` 上 —— 盒子在位图到达之前就是最终大小。
+两处图片渲染点(主装饰层与回退装饰层)收敛到新的 `editor/image-node.ts`,免得改一处漏一处。
+
+**已知边界**:每张图"这辈子第一次出现在这个浏览器里"仍会跳一次(此后进缓存,永久不再跳);
+要做到零跳需要在 Host 侧读图片头给出尺寸,留待后续。
+
+守卫用例:`test/diff.test.mjs`(最小改动/整篇重写判据)、`test/image-size.test.mjs`(命中/校验/跨会话持久化/上限)。
+
+## v0.7.1 — 大括号(可拉伸定界符)不拉伸修复(2026-10-05)
+
+**现象**:`\left\{ \begin{array}…\end{array} \right.`、`\begin{cases}` 的左大括号缩成**基号大小**
+并垂直居中,只对齐某一行(用户截图:两行 cases 里大括号比普通括号还矮)。
+
+**根因**:公式走 Temml → MathML,而**可拉伸定界符**靠字体里的 MATH 表做「组装」。
+插件只调 `temml.renderToString()`、从不注入 Temml 的字体样式表,于是 `math` 元素的有效字体
+完全交给宿主/浏览器默认解析;一旦它落到普通字体,拉伸就没了 —— Temml 自带的
+`Temml-Local.css` 第一条规则正是 `math { font-family: "Cambria Math", … }`,插件一直缺这一条。
+
+实测(Edge 153 headless,同一段 MathML,`getBoundingClientRect` 量 `mo` 与 `mtable`):
+
+| `math` 的有效 `font-family` | `mo` 高 | `mtable` 高 | 结果 |
+| --- | --- | --- | --- |
+| `math`(UA 默认) | 147.0 | 142.8 | 拉伸 |
+| `"Cambria Math"`(显式) | 147.0 | 142.8 | 拉伸 |
+| `monospace` / `inherit`(普通字体) | 35.0 | 133.8 | **不拉伸** |
+
+**修法**:`styles.ts` 加一条 `.dsh-notes-root math{font-family:"Cambria Math","STIX Two Math",
+"STIXTwoMath-Regular","Latin Modern Math","Noto Sans Math","DejaVu Math TeX Gyre",math,serif}`
+(字体栈顺序照 Temml 官方建议,再补 macOS/Linux 常见数学字体)。一处规则覆盖全部三处渲染点
+(行内 `$…$` / 块级 `$$…$$` / 表格单元格与图题),且特异度压过任何 `math`、`*` 类覆盖。
+
+**只写 `font-family`**:不搬 Temml 的 `line-height` / `font-style` 归一化 —— 那些会动行内公式的
+行盒高度,而本插件的行高测量与点击落点耦合。
+
+**影响面**:Windows 上外观不变(本机 Chrome/Edge 本来就解析到 Cambria Math),只是恢复拉伸;
+新增守卫用例 `test/math-font.test.mjs`(规则存在 + 字体栈形状 + 构建产物同步)。
+
 ## v0.7.0 — 历史回退 + 外部改动实时同步 + 图题公式(2026-10-04)
 
 三件事:agent 改坏了能**精确回到改之前**、agent 改完**用户这边立刻看到**、图题里的公式

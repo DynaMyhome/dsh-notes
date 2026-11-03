@@ -29,6 +29,13 @@ import {
 export interface EditorAreaProps {
   t: (key: string) => string
   sessionId: string
+  /**
+   * 笔记面板当前看的工作区(`null` = 会话自己的工作区)。
+   *
+   * 网页演示的 Host 路由要靠它做工作区边界校验 —— 面板可以切到已登记的其他工作区,
+   * 那时会话 cwd 不是笔记所在目录,不能拿它兜底。
+   */
+  workspaceKey: string | null
   layout: LayoutState
   onLayout: (next: LayoutState) => void
   onOutline: (items: OutlineItem[]) => void
@@ -244,6 +251,7 @@ export function EditorArea(props: EditorAreaProps): React.ReactElement {
                 key={tab.key}
                 t={t}
                 sessionId={props.sessionId}
+                workspaceKey={props.workspaceKey}
                 note={asTreeNote(tab, props.relPathOf)}
                 onOutline={outlineFor(tab.key)}
                 onCursorLine={cursorFor(tab.key)}

@@ -445,3 +445,14 @@ export function IconTrash(props: IconProps): React.ReactElement {
     </Svg>
   )
 }
+
+/** 网页演示(显示器 + 播放三角:一块"在笔记里跑起来"的页面)。 */
+export function IconEmbed(props: IconProps): React.ReactElement {
+  return (
+    <Svg {...props}>
+      <rect x="1.8" y="3" width="12.4" height="8.4" rx="1.2" />
+      <path d="M5.6 13.4h4.8" />
+      <path d="M6.6 6.6l3 1.9-3 1.9z" />
+    </Svg>
+  )
+}

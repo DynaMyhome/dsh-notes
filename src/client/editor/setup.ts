@@ -69,8 +69,8 @@ import { bandsFromRects, hitInLine, type VerticalBand } from './click-hit'
 import { moveSection as moveSectionText } from '../../../lib/section.js'
 import { markdownSyntaxConfig } from '../../../lib/markdown-syntax.js'
 import { decorateFromTree } from './decorate'
-import { renderCell } from './cell-render'
-import { parseInlineMarkdown } from './inline-parse'
+import { imageNode } from './image-node'
+import { isMostlyRewritten, minimalChange } from './diff'
 import { planBlockInsert } from './blocks'
 import { resolveImageUrl } from './media'
 import { tableBlocks, tableTab, type WidgetStrings } from './table'
@@ -264,19 +264,9 @@ class ImageWidget extends WidgetType {
   }
 
   toDOM(): HTMLElement {
-    const wrap = document.createElement('span')
-    wrap.className = 'dsh-cm-image'
-    const img = document.createElement('img')
-    img.src = this.url
-    img.alt = this.alt
-    img.loading = 'lazy'
-    const caption = document.createElement('span')
-    caption.className = 'dsh-cm-image-caption'
-    // 与主装饰层(decorate.ts 的 ImageWidget)保持一致:图题里的行内 markdown
-    // (尤其 `$公式$`)要渲染,不能把 `$A$` 原样显示出来。
-    caption.append(renderCell(this.alt, parseInlineMarkdown))
-    wrap.append(img, caption)
-    return wrap
+    // 与主装饰层(decorate.ts 的 ImageWidget)同一个 DOM 构建器:尺寸预留、图题里的
+    // 行内 markdown(尤其 `$公式$`)都在 `image-node.ts` 里,别再各写一份。
+    return imageNode(this.url, this.alt)
   }
 
   ignoreEvent(): boolean {
@@ -869,6 +859,72 @@ const theme = EditorView.theme({
   '.dsh-cm-code-body .tok-operator, .dsh-cm-code-body .tok-def, .dsh-cm-code-body .tok-separator': { color: 'var(--dsw-alias-label-secondary)' },
   '.dsh-cm-code-body .tok-atom': { color: 'var(--dsw-alias-onboarding-accent)' },
   '.dsh-cm-code-body .tok-invalid': { color: 'var(--dsw-alias-state-error-primary)' },
+  // 网页演示(`embed` 围栏 → 沙箱 iframe)。
+  // 外框只用 padding(不用 margin):margin 不进 CM6 的行高测量,会让后面所有行的
+  // 点击落点整体偏移 —— 与代码卡同一条教训。
+  '.dsh-cm-embed': { padding: '6px 0' },
+  '.dsh-cm-embed-bar': {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    minHeight: cssSize(26),
+    padding: '0 2px 4px',
+    fontSize: cssSize(11),
+    lineHeight: '1.6',
+    color: 'var(--dsw-alias-label-secondary)',
+    userSelect: 'none',
+  },
+  '.dsh-cm-embed-title': {
+    minWidth: '0',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontWeight: '600',
+    color: 'var(--dsw-alias-label-primary)',
+  },
+  '.dsh-cm-embed-actions': { display: 'inline-flex', alignItems: 'center', gap: '2px', flex: '0 0 auto' },
+  '.dsh-cm-embed-btn': {
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-secondary)',
+    font: 'inherit',
+    fontSize: cssSize(11),
+    padding: '1px 6px',
+    borderRadius: '5px',
+    cursor: 'pointer',
+  },
+  '.dsh-cm-embed-btn:hover': { color: 'var(--dsw-alias-label-primary)' },
+  '.dsh-cm-embed-holder': {
+    position: 'relative',
+    width: '100%',
+    maxWidth: '100%',
+    overflow: 'hidden',
+    borderRadius: '10px',
+    border: '1px solid var(--dsw-alias-border-l2)',
+    background: '#fff',
+  },
+  '.dsh-cm-embed-frame': {
+    display: 'block',
+    width: '100%',
+    border: '0',
+    background: '#fff',
+  },
+  '.dsh-cm-embed-handle': {
+    height: '10px',
+    cursor: 'ns-resize',
+    borderRadius: '0 0 8px 8px',
+    background: 'transparent',
+  },
+  '.dsh-cm-embed-handle:hover': { background: 'var(--dsw-alias-bg-layer-2)' },
+  '.dsh-cm-embed-error': {
+    padding: '8px 10px',
+    border: '1px dashed var(--dsw-alias-border-l2)',
+    borderRadius: '8px',
+    color: 'var(--dsw-alias-label-secondary)',
+    fontSize: cssSize(12),
+    cursor: 'text',
+  },
   '.dsh-cm-math': { padding: '0 1px' },
   '.dsh-cm-math math': { fontSize: '1.02em' },
   // 块级公式(`$$ … $$` 独占整段):块级 widget —— 用 padding 不用 margin
@@ -1031,7 +1087,13 @@ const highlight = HighlightStyle.define([
 /** 编辑器句柄。 */
 export interface EditorHandle {
   view: EditorView
-  setDoc: (text: string) => void
+  /**
+   * 把**磁盘内容**装进编辑器(外部改动静默重载 / 冲突重载 / 撤销外部改动 / id 写回)。
+   *
+   * 与"整篇替换"的区别是两件事一起做:**只把真正变了的那一段**交出去(未改动的行仍留在
+   * CM6 的高度图里),再按**文档位置**把视口放回原处 —— 见 `editor/diff.ts` 的说明。
+   */
+  replaceFromDisk: (text: string) => void
   focus: () => void
   destroy: () => void
   getDoc: () => string
@@ -1069,6 +1131,15 @@ export function createEditor(options: {
    * (见 `table.ts` 的 `WidgetStrings`);不传就用英文兜底。
    */
   strings?: WidgetStrings
+  /**
+   * 网页演示(`embed` 围栏)的宿主上下文:会话 id 与**这篇笔记所属的工作区**。
+   *
+   * 必须由外壳传:`sessionId` 决定执行世界,`workspaceKey` 决定服务端用哪个工作区根做
+   * 边界校验(笔记面板可以切到已登记的其他工作区,不能拿会话 cwd 兜底)。
+   * 不给 = 不处理 `embed` 围栏(行为与没有这个功能时完全一致)。
+   */
+  sessionId?: string
+  workspaceKey?: string | null
 }): EditorHandle {
   const sourceMode = options.sourceMode ?? isSourceMode()
   const state = EditorState.create({
@@ -1120,7 +1191,19 @@ export function createEditor(options: {
       // 块级装饰必须来自 StateField(CM6 禁止插件提供跨行替换):真表格 + 单元格交互。
       // knownTitles 一并转发 —— 单元格里的 `[[双链]]` 要与正文用**同一份**标题表,
       // 否则同一篇笔记在正文里是蓝色、在表格里却是"不存在"的样式。
-      tableBlocks(sourceMode, options.strings, options.getKnownTitles),
+      // `embed` 上下文决定 `embed` 围栏能不能变成网页演示(没有会话就不处理)。
+      tableBlocks(
+        sourceMode,
+        options.strings,
+        options.getKnownTitles,
+        options.sessionId === undefined || options.sessionId === ''
+          ? undefined
+          : {
+              sessionId: options.sessionId,
+              workspaceKey: options.workspaceKey ?? null,
+              documentPath: options.documentPath,
+            },
+      ),
       // 点**内容区之外**的空白(下方留白 / 右侧留白)→ 光标落文末并聚焦(Obsidian 手感)。
       //
       // 教训一:内容区**之内**的落点判定一律交回 CM6 自己 —— 曾经在这里推算 y 再
@@ -1391,8 +1474,42 @@ export function createEditor(options: {
 
   return {
     view,
-    setDoc: (text: string) => {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } })
+    replaceFromDisk: (text: string) => {
+      const before = view.state
+      const change = minimalChange(before.doc.toString(), text)
+      // 内容没变(含"只有 CRLF/LF 不同")→ 一次事务都别发:版本号由调用方自己对齐
+      if (change === null) return
+      const spec = { from: change.from, to: change.to, insert: change.insert }
+      // 视口快照 = 文档位置 + 行内像素偏移。CM6 明确要求:快照只对"创建它的那份文档"成立,
+      // 换了文档要自己 map(`StateEffect.map(changeSet)`)—— 这样"同一段内容"会回到原来的位置,
+      // 上方插入内容时自动补偿;改动在视口下方时映射后位置不变,视口纹丝不动。
+      const snapshot = view.scrollSnapshot()
+      const changeSet = before.changes(spec)
+
+      // 整篇重写(原样保留的部分不足 10%)时位置映射会塌到插入段开头,映射这条路就废了 ——
+      // 换一条兜底:按**行号** + 行内像素偏移,至少停在原来那一段附近而不是回到顶部。
+      const scroller = view.scrollDOM
+      const scrollTop = scroller.scrollTop
+      const block = view.lineBlockAtHeight(scrollTop)
+      const anchorLine = before.doc.lineAt(block.from).number
+      const offset = Math.max(0, scrollTop - block.top)
+      const head = Math.max(0, Math.min(before.selection.main.head, before.doc.length))
+
+      if (isMostlyRewritten(change, before.doc.length)) {
+        view.dispatch({
+          changes: spec,
+          selection: { anchor: Math.min(head, view.state.doc.length) },
+          effects: EditorView.scrollIntoView(
+            view.state.doc.line(Math.max(1, Math.min(view.state.doc.lines, anchorLine))).from,
+            { y: 'start', yMargin: -offset },
+          ),
+        })
+        return
+      }
+
+      // 非整篇重写:选区交给 CM6 自己按同一处改动映射(它比"写回旧偏移"准)
+      const mapped = snapshot.map(changeSet)
+      view.dispatch({ changes: spec, effects: mapped === undefined ? [] : [mapped] })
     },
     focus: () => view.focus(),
     destroy: () => {
@@ -1530,6 +1647,16 @@ export function insertCodeFence(view: EditorView): void {
   const range = view.state.selection.main
   const selected = view.state.sliceDoc(range.from, range.to)
   insertBlockAt(view, '```\n' + selected + '\n```', 4)
+}
+
+/**
+ * 网页演示:插入一个空的 `embed` 围栏,光标落在路径行。
+ *
+ * 模板故意**不带占位路径**:一插进来光标就在围栏里,按既有规则显示的是源码;
+ * 填好路径、把光标移开,块级 StateField 才会把它换成 iframe。写个假路径反而先弹错误卡。
+ */
+export function insertEmbedSnippet(view: EditorView): void {
+  insertBlockAt(view, '```embed\n\n```', '```embed\n'.length)
 }
 
 /** 分隔线:独占一行;插入后光标落到下一行开头,可以接着写。 */

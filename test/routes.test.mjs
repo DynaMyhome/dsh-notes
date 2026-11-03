@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { installRoutes, ROUTE_PREFIX } from '../lib/routes.js'
+import { EMBED_CSP, installRoutes, ROUTE_PREFIX } from '../lib/routes.js'
 
 /** 极简 ctx:捕获注册的 handler,并立刻执行 inject 回调。 */
 function fakeCtx() {
@@ -37,17 +37,22 @@ function fakeReq(method, url, body) {
   }
 }
 
-/** 极简 res:记录状态码与响应体。 */
+/** 极简 res:记录状态码、响应头与响应体。 */
 function fakeRes() {
   return {
     status: 0,
+    headers: {},
     body: '',
     writableEnded: false,
-    writeHead(status) {
+    headersSent: false,
+    writeHead(status, headers) {
       this.status = status
+      this.headers = headers ?? {}
+      this.headersSent = true
     },
-    end(text) {
-      this.body = text ?? ''
+    end(value) {
+      const text = value ?? ''
+      this.body = Buffer.isBuffer(text) ? text.toString('utf8') : String(text)
       this.writableEnded = true
     },
   }
@@ -200,4 +205,71 @@ test('鉴权:connection 拒绝时一律 401/403,不进入 handler', async () => 
   await routes.get(`${ROUTE_PREFIX}/create`)(fakeReq('POST', `${ROUTE_PREFIX}/create`, '{}'), res)
   assert.equal(res.status, 401)
   assert.equal(seen.length, 0)
+})
+
+test('GET /embed:query 透传,响应体是原始字节、不被 JSON 信封包住', async () => {
+  const seen = []
+  const { ctx, routes } = fakeCtx()
+  installRoutes(ctx, {
+    readEmbed: async (payload) => {
+      seen.push(payload)
+      return { bytes: Buffer.from('<!doctype html><title>demo</title>', 'utf8'), absolutePath: 'D:/ws/demo.html' }
+    },
+    tree: async () => ({}),
+  })
+  const handler = routes.get(`${ROUTE_PREFIX}/embed`)
+  assert.equal(typeof handler, 'function', 'embed 路由应已注册')
+  const res = fakeRes()
+  await handler(
+    fakeReq(
+      'GET',
+      `${ROUTE_PREFIX}/embed?sessionId=s-1&workspaceKey=k9&path=${encodeURIComponent('D:/ws/demo.html')}`,
+    ),
+    res,
+  )
+  assert.equal(res.status, 200)
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].sessionId, 's-1')
+  assert.equal(seen[0].workspaceKey, 'k9')
+  assert.equal(seen[0].path, 'D:/ws/demo.html')
+  assert.equal(res.headers['content-security-policy'], EMBED_CSP)
+  assert.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+  assert.equal(res.body, '<!doctype html><title>demo</title>')
+})
+
+test('GET /embed:CSP 必须放行内联脚本/样式、断网、且不带 allow-same-origin', () => {
+  assert.equal(EMBED_CSP.includes('sandbox'), true)
+  assert.equal(EMBED_CSP.includes("default-src 'none'"), true)
+  assert.equal(EMBED_CSP.includes("script-src 'unsafe-inline'"), true)
+  assert.equal(EMBED_CSP.includes("style-src 'unsafe-inline'"), true)
+  assert.equal(EMBED_CSP.includes("connect-src 'none'"), true)
+  assert.equal(EMBED_CSP.includes('allow-same-origin'), false, '沙箱不能给同源:演示页会拿到宿主权限')
+})
+
+test('GET /embed:失败回 HTML 错误页(不是 JSON),状态码按 code 映射', async () => {
+  const { NotesError } = await import('../lib/service.js')
+  const cases = [
+    ['INVALID', 400],
+    ['EMBED_OUTSIDE', 403],
+    ['EMBED_DISABLED', 403],
+    ['FS_PERMISSION_DENIED', 403],
+    ['NOT_FOUND', 404],
+    ['FS_TOO_LARGE', 413],
+  ]
+  for (const [code, status] of cases) {
+    const { ctx, routes } = fakeCtx()
+    installRoutes(ctx, {
+      readEmbed: async () => {
+        throw new NotesError('拒绝的原因', code)
+      },
+      tree: async () => ({}),
+    })
+    const res = fakeRes()
+    await routes.get(`${ROUTE_PREFIX}/embed`)(fakeReq('GET', `${ROUTE_PREFIX}/embed?sessionId=s-1&path=x`), res)
+    assert.equal(res.status, status, `${code} → HTTP ${status}`)
+    assert.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+    assert.equal(res.headers['content-security-policy'], EMBED_CSP)
+    assert.equal(res.body.includes('无法显示这个网页演示'), true)
+    assert.equal(res.body.includes('拒绝的原因'), true)
+  }
 })

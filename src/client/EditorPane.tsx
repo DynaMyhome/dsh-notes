@@ -28,6 +28,7 @@ import {
   historyRedo,
   historyUndo,
   insertCodeFence,
+  insertEmbedSnippet,
   insertHorizontalRule,
   insertImageSnippet,
   insertLink,
@@ -53,6 +54,7 @@ import {
   IconCheck,
   IconCode,
   IconCodeBlock,
+  IconEmbed,
   IconHistory,
   IconHr,
   IconHighlight,
@@ -88,6 +90,13 @@ const TABLE_COLS = 8
 export interface EditorPaneProps {
   t: (key: string) => string
   sessionId: string
+  /**
+   * 这篇笔记所属的工作区(`null` = 会话自己的工作区)。
+   *
+   * 笔记面板可以切到**已登记的其他工作区**(当前会话 cwd 不是笔记所在的那个),
+   * 所以网页演示的 Host 路由必须拿到它来做工作区边界校验 —— 不能拿会话 cwd 兜底。
+   */
+  workspaceKey?: string | null
   note: TreeNote
   /** 正文标题树变化(喂给左侧大纲)。 */
   onOutline?: (items: OutlineItem[]) => void
@@ -208,6 +217,15 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       codeCopy: t('editor.codeCopy'),
       codeCopied: t('editor.codeCopied'),
       codeLang: t('editor.codeLang'),
+      embedSource: t('editor.embedSource'),
+      embedReload: t('editor.embedReload'),
+      embedOpen: t('editor.embedOpen'),
+      embedResize: t('editor.embedResize'),
+      embedNoPath: t('editor.embedNoPath'),
+      embedNotHtml: t('editor.embedNotHtml'),
+      embedRemote: t('editor.embedRemote'),
+      embedBadConfig: t('editor.embedBadConfig'),
+      embedNoDocument: t('editor.embedNoDocument'),
     }),
     [t],
   )
@@ -249,7 +267,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       // 身份标识被删/被改 → Host 已按索引写回:编辑区同步成磁盘内容,免得下一次
       // 自动保存又把它删掉(用户看不到的"来回打架")。
       if (result.restoredId === true && typeof result.text === 'string') {
-        editorRef.current?.setDoc(result.text)
+        editorRef.current?.replaceFromDisk(result.text)
         dirtyRef.current = false
         setNotice(t('editor.idRestored'))
       }
@@ -303,6 +321,8 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
         documentPath: docPathRef.current,
         sourceMode,
         strings: widgetStringsRef.current,
+        sessionId,
+        workspaceKey: props.workspaceKey ?? null,
         onChange: () => {
           dirtyRef.current = true
           setSaveState('dirty')
@@ -348,7 +368,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
       if (clamped > 0) editorRef.current?.view.dispatch({ selection: { anchor: clamped } })
       if (scrollTop > 0) editorRef.current.view.scrollDOM.scrollTop = scrollTop
     },
-    [note.id, props.getKnownTitles, props.onWikiLink, sessionId, sourceMode],
+    [note.id, props.getKnownTitles, props.onWikiLink, props.workspaceKey, sessionId, sourceMode],
   )
 
   // 回调镜像:载入 effect 的依赖必须**只有**「换笔记 / 换会话」,它内部一律走 ref 取最新回调
@@ -511,7 +531,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   const reload = useCallback(() => {
     const editor = editorRef.current
     if (editor === null || conflict === null) return
-    if (conflict.text !== null) editor.setDoc(conflict.text)
+    if (conflict.text !== null) editor.replaceFromDisk(conflict.text)
     versionRef.current = conflict.version
     dirtyRef.current = false
     setConflict(null)
@@ -529,10 +549,15 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
   }, [conflict, save])
 
   /**
-   * 把磁盘上的新内容装进编辑器(**外部改动自动同步**),光标与滚动位置保留。
+   * 把磁盘上的新内容装进编辑器(**外部改动自动同步**),光标与视口位置保留。
    *
-   * `setDoc` 会触发 `onChange`(把 dirty 置 true、排一次 800ms 自动保存)—— 与既有
-   * `reload()` 同一套路:紧接着把状态改回"干净、已同步",那次定时器到点会因为
+   * **不整篇替换**:`replaceFromDisk` 只交出差异那一段(未改动的行留在 CM6 的高度图里),
+   * 并用 `scrollSnapshot()` 把视口按文档位置放回原处 —— 以前整篇 `setDoc` 会把高度图
+   * 全篇退回估算,`scrollTop` 被夹到错误的位置,表现就是"agent 改完,笔记被置顶"
+   * (用户 2026-10-09 实测)。
+   *
+   * `replaceFromDisk` 会触发 `onChange`(把 dirty 置 true、排一次 800ms 自动保存)——
+   * 与既有 `reload()` 同一套路:紧接着把状态改回"干净、已同步",那次定时器到点会因为
    * `dirty === false` 直接返回,不会把刚读进来的内容又写回去。
    * @param text - 磁盘内容(LF 形态)。
    * @param version - 该内容的版本号。
@@ -541,14 +566,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
     (text: string, version: string): void => {
       const editor = editorRef.current
       if (editor === null) return
-      const head = editor.view.state.selection.main.head
-      const scrollTop = editor.view.scrollDOM.scrollTop
-      editor.setDoc(text)
-      // 夹取再 dispatch:CM6 的 `Selection points outside of document` 是**硬抛错**
-      // (项目里每一处 dispatch 都这么夹一次,别再漏)。
-      const length = editor.view.state.doc.length
-      editor.view.dispatch({ selection: { anchor: Math.max(0, Math.min(head, length)) } })
-      if (scrollTop > 0) editor.view.scrollDOM.scrollTop = scrollTop
+      editor.replaceFromDisk(text)
       versionRef.current = version
       dirtyRef.current = false
       setSaveState('saved')
@@ -843,6 +861,7 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
         children: [
           { id: 'table', label: t('editor.table'), action: run((e) => insertTable(e.view, 3, 3)) },
           { id: 'image', label: t('editor.image'), action: run((e) => insertImageSnippet(e.view)) },
+          { id: 'embed', label: t('editor.htmlEmbed'), action: run((e) => insertEmbedSnippet(e.view)) },
           { id: 'ilink', label: t('editor.link'), action: run((e) => insertLink(e.view, '', '')) },
           { id: 'wiki', label: t('editor.wikiLink'), action: run((e) => insertWikiLinkSnippet(e.view)) },
           { id: 'mathblock', label: t('editor.mathBlock'), action: run((e) => insertMath(e.view, '', true)) },
@@ -1004,6 +1023,9 @@ export function EditorPane(props: EditorPaneProps): React.ReactElement {
           </button>
           <button type="button" className="dsh-notes-btn" title={t('editor.image')} aria-label={t('editor.image')} onClick={() => apply((e) => insertImageSnippet(e.view))}>
             <IconImage />
+          </button>
+          <button type="button" className="dsh-notes-btn" title={t('editor.htmlEmbed')} aria-label={t('editor.htmlEmbed')} onClick={() => apply((e) => insertEmbedSnippet(e.view))}>
+            <IconEmbed />
           </button>
           <button
             type="button"

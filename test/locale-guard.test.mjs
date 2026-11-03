@@ -51,7 +51,25 @@ test('英文词典里不能有中文', () => {
 })
 
 test('widget / 快速打开要用的键必须在两份字典里都有', () => {
-  const need = ['editor.chipMeta', 'editor.chipExpand', 'editor.codeCopy', 'editor.codeCopied', 'editor.codeLang', 'quick.placeholder', 'quick.empty']
+  const need = [
+    'editor.chipMeta',
+    'editor.chipExpand',
+    'editor.codeCopy',
+    'editor.codeCopied',
+    'editor.codeLang',
+    'editor.htmlEmbed',
+    'editor.embedSource',
+    'editor.embedReload',
+    'editor.embedOpen',
+    'editor.embedResize',
+    'editor.embedNoPath',
+    'editor.embedNotHtml',
+    'editor.embedRemote',
+    'editor.embedBadConfig',
+    'editor.embedNoDocument',
+    'quick.placeholder',
+    'quick.empty',
+  ]
   for (const key of need) {
     assert.equal(zh.some((entry) => entry.key === key), true, `中文缺 ${key}`)
     assert.equal(en.some((entry) => entry.key === key), true, `英文缺 ${key}`)

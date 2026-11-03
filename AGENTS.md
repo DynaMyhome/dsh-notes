@@ -142,8 +142,8 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | --- | --- | --- |
 | **决策层(纯函数)** | `lib/markdown-render.js` + `lib/markdown-syntax.js` | 输入「语法树 + 文本 + 选区 + knownTitles」,输出装饰**描述**(`line`/`hide`/`mark`/`widget`)。"该藏还是该露"的规则**只在这里**;`==高亮==`、`[[双链]]`、`$…$`、`$$…$$` 在 syntax 文件里注册成 lezer 真节点(不用正则二次扫描) |
 | **行内层(ViewPlugin)** | `src/client/editor/decorate.ts` | 把描述翻译成 CM6 装饰。插件层**不能跨行替换**,所以这里只做行级/行内;出错由 `safeBuild` 兜底(退回旧构建器 → 空集),绝不让装饰层带崩编辑器 |
-| **块级层(StateField)** | `src/client/editor/table.ts` | 跨行替换**只能**由 StateField 提供:元数据 chip、真 `<table>` widget(单元格就地编辑、表内右键插删行列)、代码卡、块级公式。它在**每次文档/选区变更**都重建 → 构建有 try/catch(`safeTableDecorations`),且按**每个编辑器**的 `sourceMode` 决定加不加装饰 |
-| **装配** | `src/client/editor/setup.ts` | `createEditor()` 组装主题/键位/输入规则/点击命中/工具栏命令;`livePreview(documentPath, getKnownTitles, sourceMode, expandTitle)` 与 `tableBlocks(sourceMode, strings)` 在这里挂上去(widget 文案经 `strings` 一路传到 `table.ts`)。**两栏分屏时两者都必须按编辑器取模式**,读模块级单例会让"另一栏切源码 → 这栏装饰全丢" |
+| **块级层(StateField)** | `src/client/editor/table.ts` | 跨行替换**只能**由 StateField 提供:元数据 chip、真 `<table>` widget(单元格就地编辑、表内右键插删行列)、代码卡、块级公式、**网页演示 iframe**。它在**每次文档/选区变更**都重建 → 构建有 try/catch(`safeTableDecorations`),且按**每个编辑器**的 `sourceMode` 决定加不加装饰 |
+| **装配** | `src/client/editor/setup.ts` | `createEditor()` 组装主题/键位/输入规则/点击命中/工具栏命令;`livePreview(documentPath, getKnownTitles, sourceMode, expandTitle)` 与 `tableBlocks(sourceMode, strings, getKnownTitles, embed)` 在这里挂上去(widget 文案经 `strings`、演示上下文经 `embed` 一路传到 `table.ts`)。**两栏分屏时两者都必须按编辑器取模式**,读模块级单例会让"另一栏切源码 → 这栏装饰全丢" |
 
 **四条硬规则(都是踩过的坑,动热路径前先读):**
 
@@ -162,6 +162,59 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 4. **单测必须与运行时同构。** 解析器要用
    `markdownLanguage.parser.configure(markdownSyntaxConfig())`;裸 `markdownLanguage.parser`
    没有自定义行内语法,`[[x]]` 会被解析成普通 `Link`,靶子用例永远是红的。
+
+### 网页演示(`embed` 围栏 → 沙箱 iframe;改这块前先读)
+
+v0.8.0 起,` ```embed <路径> ` 围栏在**块级层**(`table.ts`)被拦成 iframe。五条约定:
+
+1. **只在 StateField 里做块级替换**,且围栏必须**独占整行**(`first.from === node.from &&
+   last.to === node.to`);被 `>` 引用或列表包住的围栏退回代码卡 —— 强行跨行替换会打散
+   引用竖条 / 列表缩进。围栏也可以写成"info 只写 `embed`、路径放正文首行"。
+2. **`EmbedWidget.eq()` 刻意不比 `from`。** 比了的话,在块上方打字 → 装饰重建 → 判定不相等 →
+   iframe 重载,演示里拖好的滑块/动画全丢。位置在点击那一刻用 `view.posAtDOM(root, 0)` 现取
+   (构造时记的 `from` 会过期)。`eq()` 也**不比"算出来的初始高度"**,只比围栏里**显式写的**
+   `height:` —— 拖拽只改 localStorage,比初始高度会让"拖完点一下别处"就重载一次。
+3. **服务端只能是 `/dsh-notes/embed`,不能换成官方 `/api/file`。** 后者的响应头是
+   `Content-Security-Policy: sandbox; default-src 'none'`,HTML 进 iframe 后脚本/样式全被禁。
+   插件路由自己发 `EMBED_CSP`:`sandbox`(不带 `allow-same-origin`)+ 放行内联脚本/样式 + **断网**
+   (`connect-src 'none'`、`default-src 'none'`);演示页必须自包含(相对 CSS/JS、CDN 都不行)。
+4. **边界是工作区,不是会话 cwd。** 笔记面板可切到已登记的其他工作区,所以 `workspaceKey`
+   必须从 `NotesPane` → `EditorArea` → `EditorPane` → `createEditor` 一路传下去;服务端用
+   `fs.processPath` 的 realpath 派生路径对工作区根做 `isInsidePath`(挡 `..` 与符号链接逃逸),
+   只认 `.html/.htm`,上限 8MB。`readBytes` **不在 `FileSystem` 基类的抽象面**里 → 没有它时
+   退化成 `readText`(演示页是文本),别让一个可选方法把整个功能弄没。
+5. **演示页是不透明源**:`parent.document` / `document.cookie` / `localStorage` / 同源 `fetch`
+   全部不可用。沙箱里 iframe 会吃掉鼠标与键盘事件(拖高要铺全屏遮罩,快捷键点回正文才恢复)。
+
+纯逻辑在 `src/client/editor/embed-model.ts`(解析/路径/URL/高度夹取)与 `embed-size.ts`(高度记忆),
+靶子:`test/embed-model.test.mjs` / `test/embed-size.test.mjs`;Host 侧 `service.readEmbed` +
+`GET /dsh-notes/embed`,靶子:`test/service-embed.test.mjs` / `test/routes.test.mjs`。
+
+### 公式字体:必须由 CSS 显式指定(改公式渲染前先读)
+
+`math` 元素**必须**由 `styles.ts` 里的 `.dsh-notes-root math{font-family:…}` 显式指定数学字体。
+Temml 只输出 MathML,而**可拉伸定界符**(`\left\{` / `\begin{cases}` 的大括号、`\left(` …)靠字体里的
+**MATH 表**做「组装」;`math` 的有效字体一旦落到普通字体,大括号就缩成**基号大小**并垂直居中、
+只对齐某一行(2026-10-05 用户实测:两行 cases 里大括号比普通括号还矮)。Temml 自带的
+`Temml-Local.css` 第一条规则就是这件事 —— 插件一直没引它,等于把数学字体全交给宿主默认解析。
+
+实测(Edge 153 headless,同一段 MathML,量 `mo` 与 `mtable` 高度):
+
+| `math` 的有效 `font-family` | `mo` | `mtable` | 结果 |
+| --- | --- | --- | --- |
+| `math`(UA 默认) | 147.0 | 142.8 | 拉伸 |
+| `"Cambria Math"`(显式) | 147.0 | 142.8 | 拉伸 |
+| `monospace` / `inherit`(普通字体) | 35.0 | 133.8 | **不拉伸** |
+
+- 字体栈照 Temml 官方建议起头(`"Cambria Math"` 在 Windows 上必有、且带 MATH 表),再补
+  macOS/Linux 常见数学字体,`math` 泛型与 `serif` 只作兜底;**顺序不能反** —— 列表取第一个可用的。
+- **只写 `font-family`**:别顺手搬 Temml 的 `line-height` / `font-style` 归一化,那会动行内公式的
+  行盒高度,而本插件的行高测量与点击落点耦合(见下面「点击落点」)。
+- 一处规则覆盖全部三处渲染点:行内 `$…$`(`decorate.ts`)、块级 `$$…$$`(`table.ts`)、
+  表格单元格与图题(`cell-render.ts`)—— 它们都在 `.dsh-notes-root` 内。
+- 守卫:`test/math-font.test.mjs`(规则存在 + 字体栈形状 + **构建产物已同步**)。
+- ⚠️ **升级 DSH / 换 Electron / 换浏览器之后要复核这一条**:宿主字体偏好一变,`math` 的默认解析
+  就可能变 —— 2026-10-05 就是这么踩的。
 
 ### 横向宽度:正文永不横滚,表格自己滚(改宽度相关前先读)
 
@@ -186,6 +239,15 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 - **图片**必须两级都约束:外壳 `max-width:100%`(百分比相对**行/内容区**解析,这才是真约束)
   + `img { max-width:100%; height:auto; object-fit:contain }`。只写图片那一级是**空转** ——
   `inline-flex` 外壳的宽度本来就是由图片决定的,一张 2000px 宽的图照样把正文顶宽(用户实测)。
+- ⚠️ **图片还必须预留盒子**(v0.7.2 起;改图片渲染前先读):图片是行内 widget,`<img>`
+  **只有位图到位后才有高度**,而图片行可以高到 `max-height:320px` —— 向上滚动时视口上方
+  的 widget 被重建,该行先被量成 ~20px、位图到位后再涨到 320px,表现就是"内容突然往下
+  挪一截"(用户 2026-10-09 实测;实测数字:不写字面尺寸 → 该行 20px,写 `width=800
+  height=1600` → 322px,CSS 的 max-width/max-height 照常夹取)。所以:
+  - 图片 DOM **只有一处**构建器 `editor/image-node.ts`(主装饰层与回退装饰层共用,别再各写一份);
+  - 它从 `image-size.ts`(`localStorage['dsh-notes:img-size']`,最近 400 条)取固有尺寸,
+    命中就把 `width`/`height` 写到 `<img>` 上;`load` 时把量到的尺寸记回去(图被换过就地改正)。
+  - 未知尺寸时行为与以前一致(先 0 后涨)——所以"每张图第一次出现"仍会跳一次,属已知边界。
 
 ### 表格单元格里的行内 markdown
 
@@ -215,7 +277,7 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | 捕获点 | 代码 | origin | 覆盖 |
 | --- | --- | --- | --- |
 | `tools/execute` 写前钩子 | `lib/index.js` → `service.captureBeforeToolWrite` | `agent` | agent 的 `write`/`edit`(每次落盘**之前**读走即将被覆盖的内容) |
-| 扫描观察 | `service.captureScannedNotes`(`runScan` 末尾) | `external` / 第一次为 `baseline` | Obsidian / Typora / vim / `bash` 重定向 / 别的窗口 / 插件自己的保存 |
+| 扫描观察 | `service.captureScannedNotes`(`runScan` 末尾) | `external` / 第一次为 `baseline` | **本工作区所有已登记笔记**(v0.7.3 起,含 `notes/` 之外登记的):Obsidian / Typora / vim / `bash` 重定向 / `pwsh` 里跑的 Python 脚本 / 别的窗口 / 插件自己的保存 |
 | 恢复前 | `service.restoreHistory` 写盘前 | `restore` | 让"恢复"本身也能再撤销 |
 
 登记一篇笔记时也会记一条 `baseline`(`service.captureBaseline`)—— 没有它,第一次**外部**改动
@@ -225,6 +287,31 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
   所以 `agent 写前 → 扫描 → 保存 → 扫描` 不会长出重复条目。
 - **有界**:`historyMaxPerNote`(默认 50),超出从最旧裁,永远保留最新一条;单条上限 2MB(超出不记)。
 - **串行化**:`service.historyChain` 把"读索引 → 追加 → 写索引"串起来,连写不会互相覆盖。
+
+### 扫描兜底为什么必须包含 `notes/` 之外的笔记(v0.7.3 的教训)
+
+`runScan` 走目录只走 `workspace.notesRoot`(默认 `notes/`,成本考虑,见「工作区 md 的三类模型」),
+而**已登记笔记可以住在工作区任何目录**(用户/Agent 显式登记进 `research/…` 是常态)。
+`runScan` 里那份 `applied.outside` 以前只被 `verifyOutside` 用来"stat 一下确认没被删" ——
+于是这类笔记的**历史兜底整条链路是空的**:写前钩子只认 `write`/`edit`,扫描又看不到它们。
+
+2026-10-24 实测(Analog IC,`n_de19d7c0a8f642899238`,`research/中期报告_研究现状/正文/…`):
+
+- `00:06–01:44` 一直用 `edit` → 19 条快照(1 baseline + 18 agent 写前),看起来"功能正常";
+- `01:44` 之后 agent 改成 **`pwsh` 里跑 Python `p.write_text()`**(02:23:26 / 02:23:55 / 02:24:30 三条实测),
+  02:30 又有一次面板/外部保存 —— **一条快照都没有**,`history.json` 停在 01:44;
+- 同一工作区 6 篇笔记里 **5 篇在 `notes/` 之外**,那 5 篇在 `history.json` 里连 `baseline` 都没有。
+
+修法(改这块之前照做):`verifyOutside` 顺带产出 `{ path, version, size }` 清单(它本来就 stat 过),
+`runScan` 把它和 `scanNotesRoot` 的结果合并后一起喂给 `captureScannedNotes`(`outside.files` 放前面,
+50 条预算优先给长期没被覆盖的那批);扫描**不完整**(比如工作区还没有 `notes/`)时也捕获,
+但那一路 `verifyOutside(..., { drop: false })` **只 stat、不删条目** —— "列不出目录"不等于"文件没了"。
+靶子:`test/service-history.test.mjs` 的两条(notes/ 之外被捕获 / 没有 notes/ 也不误删)。
+
+**仍然存在的边界(不是 bug,别去"修")**:`pwsh`/Python 这类写入按**扫描节奏**收口 ——
+一次扫描间隔内的多次中间状态会合成一条(中间态只有 `write`/`edit` 的写前钩子才有);
+`save()` 不写历史(800ms 自动保存下每存一次记一条会把 50 条上限几分钟吃光),
+所以面板里的编辑看到的是"改动后"的版本,撤销本次编辑请用编辑器自己的 Ctrl+Z。
 
 ### `tools/execute` 为什么必须在 `next()` 之前、而且必须放行
 
@@ -260,6 +347,21 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
   门控/单定时器写法,零新基础设施。
 - 两个"不要误报"的护栏:`savingRef`(保存飞行中跳过)与 `beaconTextRef`(还有一次 beacon 写入
   没被认领时跳过)。
+- **磁盘内容落进编辑器必须走 `EditorHandle.replaceFromDisk`,不许整篇 `setDoc`**(v0.7.2 起;
+  改这条链路前先读)。2026-10-09 用户实测:agent 改完笔记,静默重载后视口跑到别处("被置顶")——
+  因为整篇替换(`dispatch({from:0,to:len,insert})`)会让 CM6 的高度图**全篇退回 `lineHeight`
+  估算**(带图的行实测 320px,估算只有 ~20px),文档总高瞬间缩水,而 `ChangeDesc.mapPos` 又把
+  所有位置映射到插入段末尾,最后只能把**原始 scrollTop** 写回去,落点自然不准。正确做法:
+  - `editor/diff.ts` 先夹出**最小改动**(公共前缀/后缀;顺带把 `readNote` 给的磁盘原文 CRLF
+    归一成 LF —— 编辑器文档恒为 LF);
+  - 再用 CM6 官方的 `view.scrollSnapshot()` + `effect.map(changes)`,按**文档位置 + 行内像素偏移**
+    把视口放回同一段内容(未改动的行仍留在高度图里,这是"位置不丢"的前提);
+  - 整篇重写(`isMostlyRewritten`:原样保留不足 10%)时位置映射没有意义,退化成
+    "同一行号 + 同一像素偏移"。
+  - 实测(工装跑真实 `createEditor`/`replaceFromDisk`,400 行 + 27 张 320px 图片行,
+    在文档最上面插一行):旧路 视口 第 221 行 → 第 392 行、总高 16276 → 9658;新路 第 221 行 →
+    第 222 行(插了一行)且**文本仍是同一行**、总高 16296。
+  - 守卫:`test/diff.test.mjs`。
 
 ## 身份、标题与多文档
 
@@ -346,7 +448,7 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 ## 功能现状(已交付,别重复造)
 
 - **编辑器**:预览/源码**按栏独立**(编辑器条**右侧固定簇**里的那个按钮切换,不参与工具栏滚动);
-  工具栏 **21 键**(6 组 + 4 弹层:标题 / 链接 / 表格 / 公式),另有 **2 个整篇动作**(预览/源码、保存)
+  工具栏 **22 键**(6 组 + 4 弹层:标题 / 链接 / 表格 / 公式),另有 **2 个整篇动作**(预览/源码、保存)
   固定在右侧 —— 它们以前排在工具栏末尾,默认侧栏宽度下会被挤出可视区;
   右键菜单 = 「引用此处」+ 文本格式 / 段落设置 / 插入(**表内**右键换成插删行列);
   `[[` 补全(Tab 接受、不再多出 `]]`);图片粘贴/拖入;大纲面板;`Ctrl/Cmd+S/F/B/I/E`、
@@ -389,6 +491,13 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
   `test/locale-guard.test.mjs` 会拦住以后再硬编码中文。
 - **索引落盘**(2026-10-01 修):内容没变不写盘(以前每 ~8s 整份重写一次,因为 4s 轮询每次都刷
   `lastUsedAt`);一次写失败不再毒化后续(以前索引从此只活在内存里)。
+- **外部改动不丢位置 + 图片不再顶跳**(v0.7.2,2026-10-09):
+  - 磁盘内容落进编辑器改走 `replaceFromDisk`(最小 diff + `scrollSnapshot`),**不再整篇 `setDoc`**:
+    agent 改完笔记后视口停在原来看的那一段(以前会被置顶);冲突重载 / 撤销外部改动 / id 写回
+    走同一条路(细节与实测见「外部改动实时同步」那节)。
+  - 图片 widget 一律经 `editor/image-node.ts` 构建,并从 `image-size.ts` 取固有尺寸把
+    `width`/`height` 预留到 `<img>` 上 —— 盒子在位图到达前就是最终大小,滚动时不再"内容突然
+    往下跳一截"(细节见「横向宽度」那节的图片条目)。
 - **历史回退 + 外部改动实时同步 + 图题公式**(v0.7.0):
   - **写前快照**:`tools/execute` 钩子在 agent 的 `write`/`edit` **落盘之前**留一份
     "即将被覆盖的内容"(细节与三条纪律见下面「历史快照与写前钩子」那节);
@@ -398,6 +507,15 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
     二次确认恢复;冲突横幅里有可回退历史时多一个「撤销这次外部改动」;
   - **图题公式**:图片 alt(图题)与表格单元格走同一套行内渲染(公式走 Temml),
     `$A$` 不再显示成原文 —— 解析器单例在 `editor/inline-parse.ts`。
+- **历史兜底覆盖 `notes/` 之外的已登记笔记**(v0.7.3,2026-10-24):扫描兜底不再只看 `notes/`,
+  登记到工作区其它目录(如 `research/…`)的笔记也会被捕获 —— `pwsh` 里跑的 Python 写入、
+  其它编辑器、笔记面板自己的保存都算;扫描不完整时只 stat、不删条目。
+  现象/根因/实测见「历史快照与写前钩子」那节的「扫描兜底为什么必须包含 `notes/` 之外的笔记」。
+- **网页演示**(v0.8.0,2026-11-03):` ```embed <路径> ` 围栏 → 就地沙箱 iframe,演示页真的
+  能跑(工具 **21→22 键**,插入组 + 右键「插入」都有入口)。只服务当前工作区内的 `.html/.htm`;
+  脚本可跑但**断网**、拿不到宿主(`sandbox` 无 `allow-same-origin`);底边可拖高度并按文件记住;
+  光标进围栏 → 源码。语法/安全模型/热路径坑见「渲染管线与热路径」的「网页演示」小节,
+  Host 侧 `readEmbed` + `GET /dsh-notes/embed`,配置 `htmlEmbed`(默认开)。
 - **窗口:** 侧栏 tab 的 chip 是「图标 + Notes」(`sidebar.right.pane.tab.title` 座位)。
 
 ## 位置决定(已实测,别再翻)
@@ -415,11 +533,11 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | 路径 | 作用 |
 | --- | --- |
 | `lib/index.js` | Host 半:配置、索引装配、路由注册、`knowledge` 工具 |
-| `lib/service.js` | 工作区解析与切换、扫描(目录前沿续走)、三类分类、回收站、守卫式保存;**每个工作区一份 registry**(`registryFor` / `persist(key)`) |
+| `lib/service.js` | 工作区解析与切换、扫描(目录前沿续走)、三类分类、回收站、守卫式保存、**只读网页演示 `readEmbed`(工作区边界 + `.html/.htm` + 8MB)**;**每个工作区一份 registry**(`registryFor` / `persist(key)`) |
 | `lib/store.js` | **存储位置决策 + 数据切片 + 路径记法(纯函数)**:工作区/机器本地路径、切片与合并、键的认领、**绝对 ⇄ 工作区相对的转换(`relativizeState` / `toAbsolute` / `toWorkspaceRel`)**;单测 `test/store.test.mjs` |
 | `lib/registry.js` | 按工作区的薄索引(登记/忽略/忽略 glob/扫描根/最近使用) |
 | `lib/notes.js` | 纯函数:路径 / frontmatter / 标题(=文件名)/ glob 匹配 / **`mtimeOfVersion`(版本号 → mtime)** / **`detectEol`·`applyEol`·`normalizeEol`** / `relativeToWorkspace` |
-| `lib/routes.js` | 内容路由 `/dsh-notes/*`(全部接受 `workspaceKey`) |
+| `lib/routes.js` | 内容路由 `/dsh-notes/*`(全部接受 `workspaceKey`);`GET /embed` 是唯一**不回 JSON 信封**的一条(回文件字节 / HTML 错误页,自带 `EMBED_CSP`) |
 | `lib/tool.js` | `knowledge` 工具的两个 op 面 |
 | `lib/history.js` | **历史快照的纯逻辑**:去重(`upsertEntry`)/ 裁剪 / **`predecessorOf`(按 `version` 找"当前内容之前那一次")** / 文件名形状校验(防目录穿越);单测 `test/history.test.mjs` |
 | `lib/markdown-render.js` | **渲染决策层(纯函数)**,单测 `test/markdown-render.test.mjs` |
@@ -429,6 +547,7 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | `src/client/main.tsx` | 侧栏注册、错误边界、i18n(zh/en 两份字典要同步加键) |
 | `src/client/NotesPane.tsx` | 区域外壳:工作区切换、树、4s 轮询(按 `tab.visible` 门控)、**1.5s 外部版本探针(`probeExternal`)**,布局(`tabs`)、字号缩放状态 |
 | `src/client/scale.ts` | 字号/图标缩放的**纯模型**(偏好读写/夹取 + `cssSize()` 公式),单测 `test/scale.test.mjs` |
+| `src/client/image-size.ts` | 图片固有尺寸缓存(**纯模型 + 可注入 storage**):会话内存 + `localStorage['dsh-notes:img-size']`(最近 400 条),给图片 widget 预留盒子用;单测 `test/image-size.test.mjs` |
 | `src/client/ScaleControl.tsx` | 标题栏的 `Aa` 按钮 + 浮层(预设 / 滑块 / 复位) |
 | `src/client/editor/tabs.ts` | 标签/分栏**纯模型**(打开/关闭/移栏/持久化),单测 `test/tabs.test.mjs` |
 | `src/client/EditorArea.tsx` / `TabStrip.tsx` | 分栏渲染、标签条、拖动换栏(切回可见/改字号时 `requestMeasure`) |
@@ -442,15 +561,19 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | `src/client/DirPicker.tsx` | 目录选择浮层(breadcrumb + 子目录;种子 = 工作区根;**不许走出工作区**) |
 | `src/client/TrashPane.tsx` / `OutlinePane.tsx` / `QuickOpen.tsx` | 回收站 / 大纲 / 快速打开(`t` 由外壳注入,文案走字典) |
 | `src/client/ContextMenu.tsx` | 共享右键菜单(分组 + 二级菜单 + 视口夹取) |
-| `src/client/editor/setup.ts` | CM6 装配:主题、键位、输入规则、点击命中、工具栏命令、**widget 文案(`strings` 转发)** |
+| `src/client/editor/setup.ts` | CM6 装配:主题、键位、输入规则、点击命中、工具栏命令、`insertEmbedSnippet`、**widget 文案(`strings` 转发)与演示上下文(`embed` 转发)** |
 | `src/client/editor/decorate.ts` | 行内装饰 ViewPlugin(`safeBuild` 兜底) |
-| `src/client/editor/table.ts` | 块级 StateField(chip / 表格 / 代码卡 / 公式)+ `tableTab`;**单元格用决策层渲染行内 markdown** |
+| `src/client/editor/table.ts` | 块级 StateField(chip / 表格 / 代码卡 / 公式 / **网页演示 iframe**)+ `tableTab`;**单元格用决策层渲染行内 markdown** |
 | `src/client/editor/cell-inline.ts` | 单元格的**行内节点模型**(纯函数:扁平区间 → 嵌套树),单测 `test/cell-inline.test.mjs` |
 | `src/client/editor/cell-render.ts` | 节点树 → DOM(公式走 Temml;认不出的 widget 退回原文);**图题(图片 alt)也走它** |
 | `src/client/editor/inline-parse.ts` | **行内 markdown 解析器单例**(`markdownLanguage.parser.configure(markdownSyntaxConfig())`):表格单元格 / 图题 / 回退装饰层共用,别再各写一份 |
 | `src/client/editor/selection.ts` | 选区包裹的纯逻辑(**必须用 `EditorSelection.range`**) |
 | `src/client/editor/table-model.ts` / `blocks.ts` / `reference.ts` | 纯模型:表格解析 / **表内插删行列(`applyTableAction`)** / 块级插入规划 / 引用载荷 |
-| `src/client/editor/media.ts` | 媒体地址工具(单独成模块是为打断 `decorate ⇄ setup` 循环依赖) |
+| `src/client/editor/media.ts` | 媒体地址工具(`resolveLocalPath` 本地路径归一 + 图片走 `api/file`;单独成模块是为打断 `decorate ⇄ setup` 循环依赖) |
+| `src/client/editor/embed-model.ts` | **网页演示纯模型**:`embed` 围栏解析 / 相对路径 / `embedSrc` / 高度夹取 / 刷新 nonce,单测 `test/embed-model.test.mjs` |
+| `src/client/editor/embed-size.ts` | 网页演示的**高度记忆**(纯模型 + 可注入 storage,`localStorage['dsh-notes:embed-size']`,最近 200 条),单测 `test/embed-size.test.mjs` |
+| `src/client/editor/image-node.ts` | **图片 DOM 的唯一构建器**(主装饰层 + 回退装饰层共用):从 `image-size.ts` 取固有尺寸预留 `width`/`height`、`load` 时把尺寸记回去;图题走 `cell-render` |
+| `src/client/editor/diff.ts` | 外部改动落盘的**最小改动**(公共前缀/后缀 + CRLF→LF)与"整篇重写"判据(纯函数),单测 `test/diff.test.mjs` |
 | `src/client/editor/frontmatter.ts` | frontmatter 范围解析 + 打开笔记时的初始光标(`initialAnchor`) |
 | `src/client/editor/mode.ts` | **源码模式的模块级开关**(装饰层缺省读它;分屏时按编辑器另传布尔值) |
 | `src/client/icons.tsx` | 全部内联 SVG 图标(统一外壳 + 缩放契约:尺寸走 `cssSize`,漏了就是"只有折叠箭头不变大") |
@@ -459,14 +582,14 @@ Windows node 上实测:这类问题一次红 12 条。宿主 `fs` 与 Win32 API 
 | `scripts/build.mjs` | esbuild 打包(module loader 懒工厂格式;react 保持 external) |
 | `scripts/build-graph.mjs` | 依赖环检查(改完客户端跑一次,要求 `cycles: 0`) |
 | `cordis.patch.yml` | 安装进 profile 的 bundle patch(插入一行) |
-| `test/` | `node --test` 单测(**274 条**):含 `store`(存储纯函数 + **相对路径往返/搬迁**)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`service-scan-time`(**真 version token** 的时间排序)、`service-save-eol`(**行尾保真**)、`service-scan-roots`(扫描根的边界)、`browse-path` / `scan-sort` / `frontmatter`(CRLF 坐标) / `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫)、`platform-paths`(**跨平台路径方言 / 保留设备名靶子**,喂 Win32 输入)、`history`(历史纯逻辑)、`service-history`(**V1→V2→V3→V4 连写 / 去重 / 扫描兜底 / 越界文件名 / 超大文件**)、`index-hook`(**装配契约:钩子必须放行 `next()`、读盘失败也不能打断写入**)、`service-stat`(版本探针) |
+| `test/` | `node --test` 单测(**316 条**):含 `store`(存储纯函数 + **相对路径往返/搬迁**)、`store-scope`(迁移/搬走工作区/只读/回收站/`.dsh-notes` 不被扫)、`service-scan-time`(**真 version token** 的时间排序)、`service-save-eol`(**行尾保真**)、`service-scan-roots`(扫描根的边界)、`browse-path` / `scan-sort` / `frontmatter`(CRLF 坐标) / `click-hit`(软换行落点)、`table-model`(表内插删行列)、`service-persist`(落盘去重/抗中毒)、`locale-guard`(双语文案守卫)、`platform-paths`(**跨平台路径方言 / 保留设备名靶子**,喂 Win32 输入)、`history`(历史纯逻辑)、`service-history`(**V1→V2→V3→V4 连写 / 去重 / 扫描兜底 / `notes/` 之外的已登记笔记 / 没有 `notes/` 时不误删 / 越界文件名 / 超大文件**)、`index-hook`(**装配契约:钩子必须放行 `next()`、读盘失败也不能打断写入**)、`service-stat`(版本探针)、`math-font`(公式字体栈 + 构建产物同步)、`diff`(最小改动)、`image-size`(图片尺寸缓存)、`embed-model` / `embed-size`(网页演示的纯逻辑)、`service-embed`(**演示取数的工作区边界/扩展名/禁用开关**) |
 
 ## 发布、仓库与市场(改仓库外观 / 发版前先读)
 
 | 事实 | 值 |
 | --- | --- |
 | 仓库 | `DynaMyhome/dsh-notes` —— **2026-10-02 起 public**,已加 `dsh-plugin` topic |
-| 版本线 | v0.5.0(2026-10-01 规范化)→ v0.5.1(README 图文版 + 截图声明)→ v0.5.2(平台兼容)→ v0.6.0(漏声明的 peer)→ **v0.7.0**(历史回退 + 外部改动实时同步 + 图题公式,2026-10-04) |
+| 版本线 | v0.5.0(2026-10-01 规范化)→ v0.5.1(README 图文版 + 截图声明)→ v0.5.2(平台兼容)→ v0.6.0(漏声明的 peer)→ **v0.7.0**(历史回退 + 外部改动实时同步 + 图题公式,2026-10-04)→ v0.7.1(公式字体,2026-10-05)→ **v0.7.2**(外部改动不丢位置 + 图片预留尺寸,2026-10-09)→ v0.7.3(历史兜底覆盖 `notes/` 之外的已登记笔记,2026-10-24)→ **v0.8.0**(网页演示 `embed` 围栏 → 沙箱 iframe,2026-11-03);**v0.7.1 / v0.7.2 / v0.7.3 / v0.8.0 只改了版本号与 CHANGELOG,尚未打 tag / 推送** |
 | tag / Release | 一版一个 annotated tag + GitHub Release,body 取 CHANGELOG 对应段;**v0.7.0 已于 2026-10-04 推送**(tag `v0.7.0` → commit `c273cd1`,Release [v0.7.0](https://github.com/DynaMyhome/dsh-notes/releases/tag/v0.7.0));v0.5.1 / v0.5.2 已于 2026-10-02 补齐 |
 | 推送凭据 | 本机 `origin` 是 **SSH**(`git@github.com:…`),但 Windows 侧**没有可用的 ssh-agent/key**(`Permission denied (publickey)`);`gh` 已以 `Phy-D` 登录(HTTPS 协议),所以推送走 `git -c credential.helper='!gh auth git-credential' push https://github.com/DynaMyhome/dsh-notes.git master`(WSL 侧仍可用 SSH) |
 | 对外的发布面 | 不是 npm(`private: true`,从不发布)——**git 仓库本身就是发布面**:README、`docs/images/`、`screenshots.json` |

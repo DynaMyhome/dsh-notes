@@ -19,6 +19,17 @@ import { renderCell } from './cell-render'
 import { parseInlineMarkdown } from './inline-parse'
 import { isDelimiterRow, parseTable, type TableModel } from './table-model'
 import { frontmatterEndOf } from './frontmatter'
+import {
+  DEFAULT_EMBED_HEIGHT,
+  clampEmbedHeight,
+  embedSrc,
+  isEmbedFence,
+  planEmbed,
+  withReloadNonce,
+  type EmbedContext,
+  type EmbedProblem,
+} from './embed-model'
+import { embedHeights } from './embed-size'
 import { jsxLanguage, tsxLanguage, javascript, javascriptLanguage, typescriptLanguage } from '@codemirror/lang-javascript'
 import { json, jsonLanguage } from '@codemirror/lang-json'
 import { python, pythonLanguage } from '@codemirror/lang-python'
@@ -53,6 +64,24 @@ export interface WidgetStrings {
   codeCopied: string
   /** 代码卡语言名的提示。 */
   codeLang: string
+  /** 网页演示条:回到围栏源码。 */
+  embedSource: string
+  /** 网页演示条:重新加载 iframe。 */
+  embedReload: string
+  /** 网页演示条:在新标签打开(仅 http(s) 载体)。 */
+  embedOpen: string
+  /** 网页演示条 / 底边手柄的提示。 */
+  embedResize: string
+  /** 演示围栏里没有路径。 */
+  embedNoPath: string
+  /** 演示目标不是 .html/.htm。 */
+  embedNotHtml: string
+  /** 演示目标是远端地址。 */
+  embedRemote: string
+  /** 演示围栏的配置写坏了。 */
+  embedBadConfig: string
+  /** 还没有文档路径(理论上不该出现)。 */
+  embedNoDocument: string
 }
 
 /** 没有外壳注入时的兜底文案(英文;中文由字典提供)。 */
@@ -62,6 +91,24 @@ export const DEFAULT_WIDGET_STRINGS: WidgetStrings = {
   codeCopy: 'Copy',
   codeCopied: 'Copied',
   codeLang: 'Click to change language',
+  embedSource: 'Source',
+  embedReload: 'Reload',
+  embedOpen: 'Open in tab',
+  embedResize: 'Drag to resize',
+  embedNoPath: 'No HTML path in this demo block',
+  embedNotHtml: 'Only .html / .htm files can be embedded',
+  embedRemote: 'Only local workspace files can be embedded',
+  embedBadConfig: 'Cannot parse this demo block',
+  embedNoDocument: 'Open a note first',
+}
+
+/** 演示解析失败 → 条上显示的文案。 */
+function embedProblemText(problem: EmbedProblem, strings: WidgetStrings): string {
+  if (problem === 'not-html') return strings.embedNotHtml
+  if (problem === 'remote') return strings.embedRemote
+  if (problem === 'bad-config' || problem === 'not-embed') return strings.embedBadConfig
+  if (problem === 'no-document') return strings.embedNoDocument
+  return strings.embedNoPath
 }
 
 /**
@@ -292,6 +339,11 @@ export function buildTableDecorations(
   sourceMode: boolean = isSourceMode(),
   strings: WidgetStrings = DEFAULT_WIDGET_STRINGS,
   getKnownTitles: () => Set<string> = () => new Set(),
+  /**
+   * 网页演示的宿主上下文(省略 = 不处理 `embed` 围栏,行为与以前完全一致)。
+   * 单测/没有会话的装配可以不给。
+   */
+  embed?: EmbedContext,
 ): DecorationSet {
   // 源码模式:不加任何块级装饰(按**这个编辑器**的模式,不再读全局单例 —— 两栏分屏时
   // 左边预览、右边源码是常态)
@@ -352,8 +404,35 @@ export function buildTableDecorations(
       // **光标进入这块时收起卡片、显示源码** —— 编辑交给编辑器本体(多行选择/中文输入法/
       // 撤销/搜索全原生)。这是 Obsidian Live Preview 的做法,比在 widget 里嵌编辑器稳。
       if (node.name === 'FencedCode') {
-        if (selectionTouches(state, node.from, node.to)) return
         const source = state.doc.sliceString(node.from, node.to)
+        // 网页演示:语言标记是 `embed`。**只在围栏独占整行时**才替换成块级 iframe ——
+        // 跨行 replace 要求范围落在行边界上;被 `>` 引用或列表包住的围栏保持代码卡
+        // (块级 widget 塞不进那种结构,强行做会把引用竖条/列表缩进打散)。
+        const first = state.doc.lineAt(node.from)
+        const last = state.doc.lineAt(Math.max(node.from, node.to - 1))
+        const wholeLines = first.from === node.from && last.to === node.to
+        if (embed !== undefined && wholeLines && isEmbedFence(source)) {
+          if (selectionTouches(state, first.from, last.to)) return
+          const plan = planEmbed(source, embed.documentPath)
+          if (plan.ok) {
+            const explicit = plan.height
+            const height = explicit ?? embedHeights.heightOf(plan.absolutePath) ?? DEFAULT_EMBED_HEIGHT
+            const view: EmbedView = {
+              src: embedSrc(embed, plan.absolutePath),
+              title: plan.title,
+              height,
+              explicit,
+              path: plan.absolutePath,
+            }
+            ranges.push(Decoration.replace({ widget: new EmbedWidget(view, strings), block: true }).range(node.from, node.to))
+          } else {
+            ranges.push(
+              Decoration.replace({ widget: new EmbedErrorWidget(plan.problem, strings), block: true }).range(node.from, node.to),
+            )
+          }
+          return
+        }
+        if (selectionTouches(state, node.from, node.to)) return
         ranges.push(Decoration.replace({ widget: new CodeCardWidget(source, node.from, strings), block: true }).range(node.from, node.to))
       }
     },
@@ -553,6 +632,222 @@ class CodeCardWidget extends WidgetType {
 }
 
 /**
+ * 把光标送回**这个块**的源码位置。
+ *
+ * 为什么不用 widget 构造时记下的 `from`:`eq()` 刻意**不比 `from`**(否则在块上方
+ * 打字就会重建 iframe、丢掉演示状态),于是 widget 实例的 `from` 可能已经过期。
+ * `view.posAtDOM(...)` 在点击那一刻按当前 DOM 反查,位置永远是对的。
+ */
+function revealBlockSource(view: EditorView, dom: HTMLElement): void {
+  let position = view.state.selection.main.head
+  try {
+    position = view.posAtDOM(dom, 0)
+  } catch {
+    // 极端情况下(块刚被替换/重建)拿不到位置:退回当前光标,至少不抛错。
+  }
+  const length = view.state.doc.length
+  view.dispatch({ selection: { anchor: Math.max(0, Math.min(position, length)) } })
+  view.focus()
+}
+
+/** 一次网页演示的渲染输入(解析完的结果;不含文档位置)。 */
+interface EmbedView {
+  /** iframe 地址(含 sessionId / workspaceKey / path)。 */
+  src: string
+  /** 条上的标题(用户写的 title 或文件名)。 */
+  title: string
+  /** iframe 的初始高度(px;显式 height: > 拖拽记忆 > 默认)。 */
+  height: number
+  /**
+   * 围栏里**显式写的**高度(`height:`),没写就是 null。
+   *
+   * 为什么要和 `height` 分开:拖拽只改 localStorage,不改围栏。如果 `eq()` 拿
+   * "本次算出的初始高度"去比,拖完高度后下一次重建(点别处/改一个字)就会判定不相等 →
+   * 重建 iframe → 刚拖好、正在跑的演示白重载。比 `explicit` 就只在用户真的改了
+   * 围栏里的 `height:` 时才重建。
+   */
+  explicit: number | null
+  /** 规范化绝对路径:高度缓存的键,也是 hover 提示里的完整路径。 */
+  path: string
+}
+
+/** 与 `EmbedWidget` 相关的那些文案是否一致(换语言要重建 DOM)。 */
+function sameEmbedStrings(a: WidgetStrings, b: WidgetStrings): boolean {
+  return (
+    a.embedSource === b.embedSource &&
+    a.embedReload === b.embedReload &&
+    a.embedOpen === b.embedOpen &&
+    a.embedResize === b.embedResize &&
+    a.chipExpand === b.chipExpand
+  )
+}
+
+/**
+ * 网页演示 widget:标题条 + 沙箱 iframe + 底边拖拽手柄。
+ *
+ * 沙箱是**响应头的 CSP `sandbox`** 给的(见 `lib/routes.js` 的 `EMBED_CSP`),
+ * 这里再写一遍 `sandbox` 属性是第二道闸:演示页拿到不透明源,`parent.document` /
+ * `document.cookie` / `localStorage` / 同源 `fetch` 全部不可用。
+ */
+class EmbedWidget extends WidgetType {
+  constructor(
+    readonly view: EmbedView,
+    readonly strings: WidgetStrings = DEFAULT_WIDGET_STRINGS,
+  ) {
+    super()
+  }
+
+  /**
+   * **刻意不比 `from`**:在块上方打字时,装饰会重建、`from` 会变;把它算进相等性
+   * 会让 iframe 每敲一个字就重载(演示里拖好的滑块/动画全丢)。只比渲染输入。
+   */
+  eq(other: EmbedWidget): boolean {
+    return (
+      other.view.src === this.view.src &&
+      other.view.title === this.view.title &&
+      other.view.explicit === this.view.explicit &&
+      other.view.path === this.view.path &&
+      sameEmbedStrings(other.strings, this.strings)
+    )
+  }
+
+  private button(text: string, title: string, onClick: () => void): HTMLButtonElement {
+    const el = document.createElement('button')
+    el.type = 'button'
+    el.className = 'dsh-cm-embed-btn'
+    el.textContent = text
+    el.title = title
+    // 不让事件冒到 `view.dom`:那里有"点击落点修正",会把光标塞进块里 → 块塌成源码。
+    el.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      onClick()
+    })
+    return el
+  }
+
+  /**
+   * 拖底边改高度。
+   *
+   * 拖动期间必须在 `document.body` 上铺一层**全屏透明遮罩**:鼠标一旦滑到 iframe
+   * 上方,事件就被 iframe 自己的文档吃掉,父文档收不到 `mousemove` —— 不铺遮罩
+   * 会表现为"往下拖两下就卡住"。
+   */
+  private beginResize(event: MouseEvent, view: EditorView, frame: HTMLIFrameElement): void {
+    event.preventDefault()
+    event.stopPropagation()
+    const startY = event.clientY
+    const startHeight = Math.round(frame.getBoundingClientRect().height) || this.view.height
+    const shield = document.createElement('div')
+    shield.className = 'dsh-cm-embed-shield'
+    // 遮罩挂在 body 上,不在编辑器主题的作用域里 —— 样式必须内联。
+    shield.style.cssText = 'position:fixed;inset:0;z-index:999999;cursor:ns-resize;background:transparent'
+    document.body.appendChild(shield)
+    const move = (moveEvent: MouseEvent): void => {
+      frame.style.height = `${clampEmbedHeight(startHeight + moveEvent.clientY - startY)}px`
+      view.requestMeasure()
+    }
+    const up = (): void => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      shield.remove()
+      const height = Math.round(frame.getBoundingClientRect().height)
+      if (height > 0) embedHeights.remember(this.view.path, height)
+      view.requestMeasure()
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const root = document.createElement('div')
+    root.className = 'dsh-cm-embed'
+
+    const bar = document.createElement('div')
+    bar.className = 'dsh-cm-embed-bar'
+    bar.title = this.view.path
+    const label = document.createElement('span')
+    label.className = 'dsh-cm-embed-title'
+    label.textContent = this.view.title
+    const actions = document.createElement('span')
+    actions.className = 'dsh-cm-embed-actions'
+    actions.append(
+      this.button(this.strings.embedSource, this.strings.chipExpand, () => revealBlockSource(view, root)),
+      this.button(this.strings.embedReload, this.strings.embedReload, () => {
+        frame.src = withReloadNonce(this.view.src)
+      }),
+    )
+    // 桌面壳的自定义 scheme 下 `window.open` 未必被放行:只在 http(s) 载体上给这个入口。
+    const protocol = typeof window === 'undefined' ? '' : window.location.protocol
+    if (protocol === 'http:' || protocol === 'https:') {
+      actions.append(
+        this.button(this.strings.embedOpen, this.strings.embedOpen, () => {
+          window.open(this.view.src, '_blank', 'noopener,noreferrer')
+        }),
+      )
+    }
+    bar.append(label, actions)
+
+    const holder = document.createElement('div')
+    holder.className = 'dsh-cm-embed-holder'
+    const frame = document.createElement('iframe')
+    frame.className = 'dsh-cm-embed-frame'
+    frame.title = this.view.title
+    frame.setAttribute('sandbox', 'allow-scripts allow-downloads allow-modals allow-pointer-lock')
+    frame.setAttribute('referrerpolicy', 'no-referrer')
+    frame.src = this.view.src
+    frame.style.height = `${this.view.height}px`
+    holder.appendChild(frame)
+
+    const handle = document.createElement('div')
+    handle.className = 'dsh-cm-embed-handle'
+    handle.title = this.strings.embedResize
+    handle.addEventListener('mousedown', (event) => this.beginResize(event, view, frame))
+    // 条本身也吞掉 mousedown(点空白处不该把光标塞进块里)。
+    bar.addEventListener('mousedown', (event) => event.stopPropagation())
+
+    root.append(bar, holder, handle)
+    return root
+  }
+
+  ignoreEvent(): boolean {
+    // 内部有 iframe / 按钮 / 拖拽手柄,不让 CM6 再处理这些事件
+    return true
+  }
+}
+
+/** 演示配置有问题时的占位卡:点一下回到围栏源码,不静默消失。 */
+class EmbedErrorWidget extends WidgetType {
+  constructor(
+    readonly problem: EmbedProblem,
+    readonly strings: WidgetStrings = DEFAULT_WIDGET_STRINGS,
+  ) {
+    super()
+  }
+
+  eq(other: EmbedErrorWidget): boolean {
+    return other.problem === this.problem && other.strings.embedBadConfig === this.strings.embedBadConfig
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const box = document.createElement('div')
+    box.className = 'dsh-cm-embed-error'
+    box.title = this.strings.chipExpand
+    box.textContent = embedProblemText(this.problem, this.strings)
+    box.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      revealBlockSource(view, box)
+    })
+    return box
+  }
+
+  ignoreEvent(): boolean {
+    return true
+  }
+}
+
+/**
  * 热路径兜底:块级装饰构建抛错**不能把整次事务带崩**。
  *
  * 为什么必须兜:`tableBlocks` 是 StateField,它的 `update` 在**每一次文档变更/选区变更**
@@ -569,9 +864,10 @@ function safeTableDecorations(
   sourceMode: boolean,
   strings: WidgetStrings,
   getKnownTitles: () => Set<string>,
+  embed?: EmbedContext,
 ): DecorationSet {
   try {
-    return buildTableDecorations(state, sourceMode, strings, getKnownTitles)
+    return buildTableDecorations(state, sourceMode, strings, getKnownTitles, embed)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('[dsh-notes] 块级装饰构建失败(本次跳过):', error)
@@ -589,14 +885,16 @@ export function tableBlocks(
    * 每次重建装饰时现取,才不会拿一份过期的标题表。
    */
   getKnownTitles: () => Set<string> = () => new Set(),
+  /** 网页演示的宿主上下文(省略 = 不处理 `embed` 围栏)。 */
+  embed?: EmbedContext,
 ): Extension {
   return StateField.define<DecorationSet>({
-    create: (state) => safeTableDecorations(state, sourceMode, strings, getKnownTitles),
+    create: (state) => safeTableDecorations(state, sourceMode, strings, getKnownTitles, embed),
     // sourceMode 必须一并转发:早先这里漏了,于是任何一次改动都会按**模块级**默认值重建,
     // 两栏分屏时"源码栏被预览装饰覆盖"就是这么来的。
     update: (value, transaction) =>
       transaction.docChanged || transaction.selection !== undefined
-        ? safeTableDecorations(transaction.state, sourceMode, strings, getKnownTitles)
+        ? safeTableDecorations(transaction.state, sourceMode, strings, getKnownTitles, embed)
         : value,
     provide: (field) => EditorView.decorations.from(field),
   })

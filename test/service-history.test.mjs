@@ -99,7 +99,14 @@ async function setup(initial = V1) {
   await mkdir(join(root, 'notes'), { recursive: true })
   const file = join(root, 'notes', '甲.md')
   await writeFile(file, initial, 'utf8')
-  const service = new NoteService(realContext(root), {
+  const service = makeService(root, base)
+  await service.register({ sessionId: 'session-1', path: file })
+  return { base, root, file, service }
+}
+
+/** 真临时目录 + 真 listDir 的 service(与 setup 同款;`notes/` 之外的工作区自己建目录)。 */
+function makeService(root, base) {
+  return new NoteService(realContext(root), {
     notesDir: 'notes',
     assetsDir: '.dsh-assets',
     storeDir: join(base, 'store'),
@@ -111,8 +118,6 @@ async function setup(initial = V1) {
     history: true,
     historyMaxPerNote: 50,
   })
-  await service.register({ sessionId: 'session-1', path: file })
-  return { base, root, file, service }
 }
 
 /** 读历史条目的正文(从新到旧)。 */
@@ -274,6 +279,61 @@ test('超大笔记不进历史(上限之内才记)', async () => {
       await service.captureBeforeToolWrite({ name: 'write', arguments: { file_path: big }, agent: { id: 'session-1' } }),
       null,
     )
+  } finally {
+    await cleanup(base, service)
+  }
+})
+
+test('扫描兜底必须覆盖 notes/ 之外的已登记笔记(pwsh/Python 写入、面板保存都算)', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'dsh-notes-history-'))
+  const root = join(base, 'ws')
+  await mkdir(join(root, 'notes'), { recursive: true })
+  await mkdir(join(root, 'research', '正文'), { recursive: true })
+  const file = join(root, 'research', '正文', '第二部分.md')
+  await writeFile(file, V1, 'utf8')
+  const service = makeService(root, base)
+  try {
+    const note = await service.register({ sessionId: 'session-1', path: file })
+    // 没有写前钩子:模拟 agent 在 pwsh 里跑 Python `p.write_text()`(或用户从笔记面板保存)
+    await writeFile(file, V2, 'utf8')
+    await service.tree({ sessionId: 'session-1', force: true })
+    const entries = await historyTexts(service, note.id)
+    assert.deepEqual(entries.map((item) => item.text), [V2, V1], 'notes/ 之外的笔记也要被扫描兜底看见')
+    assert.deepEqual(entries.map((item) => item.origin), ['external', 'baseline'])
+
+    // 稳态:版本没变 → 不再追加
+    await service.tree({ sessionId: 'session-1', force: true })
+    assert.equal((await historyTexts(service, note.id)).length, 2, '稳态下扫描不该产生重复条目')
+
+    // 这条历史要真的能用:当前 V2 → 撤销回到 V1
+    const undone = await service.undoExternal({ sessionId: 'session-1', noteId: note.id })
+    assert.equal(undone.text, V1)
+    assert.equal(await readFile(file, 'utf8'), V1)
+  } finally {
+    await cleanup(base, service)
+  }
+})
+
+test('工作区没有 notes/(扫描不完整)时:notes/ 之外的笔记照样捕获,且绝不因"看不见"删条目', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'dsh-notes-history-'))
+  const root = join(base, 'ws')
+  await mkdir(join(root, 'research'), { recursive: true })
+  const file = join(root, 'research', '第三部分.md')
+  await writeFile(file, V1, 'utf8')
+  const service = makeService(root, base)
+  try {
+    const note = await service.register({ sessionId: 'session-1', path: file })
+    await writeFile(file, V2, 'utf8')
+    const tree = await service.tree({ sessionId: 'session-1', force: true })
+    assert.equal(tree.notesDirMissing, true, '这个工作区确实没有 notes/ 目录(扫描不完整)')
+    const entries = await historyTexts(service, note.id)
+    assert.deepEqual(entries.map((item) => item.text), [V2, V1], '扫描不完整也要走兜底捕获')
+    assert.equal(entries[0].origin, 'external')
+
+    // 扫描不完整时"看不见"≠"没了":删掉文件再扫,条目不能被判死
+    await rm(file)
+    const after = await service.tree({ sessionId: 'session-1', force: true })
+    assert.equal(after.notes.some((item) => item.id === note.id), true, '列不出目录时绝不删条目')
   } finally {
     await cleanup(base, service)
   }

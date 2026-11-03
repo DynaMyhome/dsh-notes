@@ -1664,6 +1664,7 @@ export function NotesPane(props: NotesPaneProps): React.ReactElement {
           <EditorArea
             t={t}
             sessionId={sessionId}
+            workspaceKey={workspaceKey}
             layout={layout}
             onLayout={applyLayout}
             onOutline={setOutline}
